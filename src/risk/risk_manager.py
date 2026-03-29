@@ -1,0 +1,351 @@
+"""
+Risk Management - Adaptive Position Sizing and TP/SL Calculations
+
+All TP/SL calculations are MARKET-ADAPTIVE:
+- Uses ATR (Average True Range) as the primary volatility measure
+- Adjusts multipliers based on market regime (trending/ranging/volatile)
+- Uses Fibonacci levels and Pivot Points as TP targets where available
+- Enforces minimum Risk:Reward ratio before any signal is accepted
+"""
+
+from typing import Tuple, Optional, Dict, List
+import math
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class RiskManager:
+    """
+    Adaptive risk management system.
+
+    Primary method: calculate_adaptive_tp_sl()
+    - ATR-based distances scaled to market regime
+    - R:R enforcement (minimum 1.5:1)
+    - Fibonacci and Pivot Point level snapping
+    """
+
+    def __init__(
+        self,
+        portfolio_size: float = 10000.0,
+        max_position_percent: float = 5.0,
+        min_position_percent: float = 1.0,
+        max_open_positions: int = 5,
+        risk_per_trade_percent: float = 1.0,
+        min_risk_reward: float = 1.5,
+    ):
+        self.portfolio_size = portfolio_size
+        self.max_position_percent = max_position_percent
+        self.min_position_percent = min_position_percent
+        self.max_open_positions = max_open_positions
+        self.risk_per_trade_percent = risk_per_trade_percent
+        self.min_risk_reward = min_risk_reward
+
+    # ====================================================================
+    # PRIMARY: Adaptive ATR-Based TP/SL (Use This Always)
+    # ====================================================================
+
+    def calculate_adaptive_tp_sl(
+        self,
+        entry_price: float,
+        atr: float,
+        direction: str = "long",
+        regime: str = "trending",
+        fib_levels: Optional[Dict] = None,
+        pivot_levels: Optional[Dict] = None,
+    ) -> Tuple[float, float, Dict]:
+        """
+        Calculate TP and SL adaptively based on ATR and market regime.
+
+        The regime determines the ATR multipliers:
+        - 'trending': ATR TP × 3.0, SL × 1.5 (room to run)
+        - 'ranging':  ATR TP × 1.8, SL × 1.0 (tight targets)
+        - 'volatile': ATR TP × 2.0, SL × 0.8 (quick in-out)
+
+        After ATR levels are set, the method attempts to snap to the nearest
+        Fibonacci or Pivot Point level for a more natural price target.
+
+        Args:
+            entry_price: Entry price of the trade
+            atr: Current ATR value (must not be zero)
+            direction: 'long' or 'short'
+            regime: 'trending', 'ranging', or 'volatile'
+            fib_levels: Optional dict from FibonacciLevels.calculate_from_ohlc()
+            pivot_levels: Optional dict from PivotPoints.calculate_classic()
+
+        Returns:
+            (take_profit_price, stop_loss_price, metadata_dict)
+        """
+        if atr <= 0:
+            logger.warning("ATR is zero or negative, falling back to 2%/1% static TP/SL")
+            return self._static_fallback(entry_price, direction)
+
+        # Step 1: Get regime multipliers
+        tp_mult, sl_mult = self._get_regime_multipliers(regime)
+        logger.debug(f"Regime={regime}: TP×{tp_mult}, SL×{sl_mult}")
+
+        # Step 2: Calculate raw ATR-based levels
+        if direction == "long":
+            raw_tp = entry_price + (atr * tp_mult)
+            raw_sl = entry_price - (atr * sl_mult)
+        else:
+            raw_tp = entry_price - (atr * tp_mult)
+            raw_sl = entry_price + (atr * sl_mult)
+
+        # Step 3: Try to snap TP to a nearby Fibonacci extension level
+        tp = self._snap_to_fib_tp(raw_tp, entry_price, fib_levels, direction)
+
+        # Step 4: Try to snap SL to a nearby Pivot/Fibonacci support level
+        sl = self._snap_to_support_sl(raw_sl, entry_price, fib_levels, pivot_levels, direction)
+
+        # Step 5: Enforce minimum R:R ratio
+        tp, sl = self._enforce_min_rr(entry_price, tp, sl, direction)
+
+        metadata = {
+            "regime": regime,
+            "atr": round(atr, 6),
+            "atr_tp_mult": tp_mult,
+            "atr_sl_mult": sl_mult,
+            "raw_atr_tp": round(raw_tp, 6),
+            "raw_atr_sl": round(raw_sl, 6),
+            "final_tp": round(tp, 6),
+            "final_sl": round(sl, 6),
+            "rr_ratio": round(abs(tp - entry_price) / max(abs(sl - entry_price), 1e-9), 3),
+            "fib_snap": tp != raw_tp,
+            "pivot_snap": sl != raw_sl,
+        }
+        logger.info(
+            f"Adaptive TP/SL [{direction}|{regime}] "
+            f"Entry={entry_price:.4f} TP={tp:.4f} SL={sl:.4f} "
+            f"R:R={metadata['rr_ratio']:.2f}"
+        )
+        return round(tp, 6), round(sl, 6), metadata
+
+    def _get_regime_multipliers(self, regime: str) -> Tuple[float, float]:
+        """Get (tp_mult, sl_mult) for the given market regime."""
+        multipliers = {
+            "trending":    (3.0, 1.5),
+            "trending_up": (3.0, 1.5),
+            "trending_down": (3.0, 1.5),
+            "ranging":     (1.8, 1.0),
+            "volatile":    (2.0, 0.8),
+            "choppy":      (1.5, 0.7),
+        }
+        return multipliers.get(regime, (2.5, 1.2))  # default if unknown
+
+    def _snap_to_fib_tp(
+        self,
+        raw_tp: float,
+        entry: float,
+        fib_levels: Optional[Dict],
+        direction: str,
+        snap_tolerance_pct: float = 3.0,
+    ) -> float:
+        """Snap TP to the nearest Fibonacci extension level if within tolerance."""
+        if not fib_levels or "extensions" not in fib_levels:
+            return raw_tp
+
+        ext = fib_levels.get("extensions", {})
+        candidates = []
+        for label, price in ext.items():
+            if direction == "long" and price > entry:
+                distance_pct = abs(price - raw_tp) / raw_tp * 100
+                if distance_pct <= snap_tolerance_pct:
+                    candidates.append((distance_pct, price))
+            elif direction == "short" and price < entry:
+                distance_pct = abs(price - raw_tp) / raw_tp * 100
+                if distance_pct <= snap_tolerance_pct:
+                    candidates.append((distance_pct, price))
+
+        if candidates:
+            best = min(candidates, key=lambda x: x[0])
+            logger.debug(f"Snapped TP from {raw_tp:.4f} to Fib level {best[1]:.4f}")
+            return best[1]
+        return raw_tp
+
+    def _snap_to_support_sl(
+        self,
+        raw_sl: float,
+        entry: float,
+        fib_levels: Optional[Dict],
+        pivot_levels: Optional[Dict],
+        direction: str,
+        snap_tolerance_pct: float = 2.0,
+    ) -> float:
+        """Snap SL to the nearest Fibonacci or Pivot support level."""
+        candidates = []
+
+        # Fib retracement levels as SL candidates
+        if fib_levels and "retracements" in fib_levels:
+            for label, price in fib_levels["retracements"].items():
+                if direction == "long" and price < entry:
+                    dist = abs(price - raw_sl) / raw_sl * 100
+                    if dist <= snap_tolerance_pct:
+                        candidates.append((dist, price))
+                elif direction == "short" and price > entry:
+                    dist = abs(price - raw_sl) / raw_sl * 100
+                    if dist <= snap_tolerance_pct:
+                        candidates.append((dist, price))
+
+        # Pivot support levels as SL candidates
+        if pivot_levels:
+            for label, price in pivot_levels.items():
+                if label.startswith("S") and direction == "long" and price < entry:
+                    dist = abs(price - raw_sl) / raw_sl * 100
+                    if dist <= snap_tolerance_pct:
+                        candidates.append((dist, price))
+                elif label.startswith("R") and direction == "short" and price > entry:
+                    dist = abs(price - raw_sl) / raw_sl * 100
+                    if dist <= snap_tolerance_pct:
+                        candidates.append((dist, price))
+
+        if candidates:
+            best = min(candidates, key=lambda x: x[0])
+            logger.debug(f"Snapped SL from {raw_sl:.4f} to support level {best[1]:.4f}")
+            return best[1]
+        return raw_sl
+
+    def _enforce_min_rr(
+        self,
+        entry: float,
+        tp: float,
+        sl: float,
+        direction: str,
+    ) -> Tuple[float, float]:
+        """
+        Enforce minimum risk:reward ratio by widening TP if needed.
+        Never widen SL — that increases risk.
+        """
+        risk = abs(entry - sl)
+        reward = abs(tp - entry)
+
+        if risk == 0:
+            return tp, sl
+
+        current_rr = reward / risk
+        if current_rr < self.min_risk_reward:
+            # Widen TP to meet minimum R:R
+            required_reward = risk * self.min_risk_reward
+            if direction == "long":
+                tp = entry + required_reward
+            else:
+                tp = entry - required_reward
+            logger.debug(
+                f"R:R was {current_rr:.2f}, adjusted TP to meet minimum {self.min_risk_reward:.1f}:1"
+            )
+        return tp, sl
+
+    def _static_fallback(self, entry_price: float, direction: str) -> Tuple[float, float, Dict]:
+        """Emergency fallback when ATR is unavailable."""
+        if direction == "long":
+            tp = entry_price * 1.05
+            sl = entry_price * 0.98
+        else:
+            tp = entry_price * 0.95
+            sl = entry_price * 1.02
+        return tp, sl, {"regime": "unknown", "atr": 0, "fallback": True}
+
+    # ====================================================================
+    # POSITION SIZING — Risk-Based (Fixed Fractional)
+    # ====================================================================
+
+    def calculate_position_size(
+        self,
+        entry_price: float,
+        stop_loss_price: float,
+        risk_percent: Optional[float] = None,
+    ) -> Tuple[float, float]:
+        """
+        Calculate position size using fixed-fractional risk model.
+
+        Risk Amount = Portfolio × risk_percent
+        Quantity = Risk Amount / (entry - stop_loss)
+
+        Args:
+            entry_price: Trade entry price
+            stop_loss_price: Stop loss price
+            risk_percent: % of portfolio to risk (None = default)
+
+        Returns:
+            (quantity, position_value_usd)
+        """
+        if risk_percent is None:
+            risk_percent = self.risk_per_trade_percent
+
+        risk_amount = self.portfolio_size * (risk_percent / 100)
+        price_diff = abs(entry_price - stop_loss_price)
+
+        if price_diff == 0:
+            position_value = self.portfolio_size * (self.min_position_percent / 100)
+        else:
+            quantity = risk_amount / price_diff
+            position_value = quantity * entry_price
+
+        # Clamp to min/max position percentages
+        min_pos = self.portfolio_size * (self.min_position_percent / 100)
+        max_pos = self.portfolio_size * (self.max_position_percent / 100)
+        position_value = max(min_pos, min(position_value, max_pos))
+        quantity = position_value / entry_price
+
+        return round(quantity, 8), round(position_value, 2)
+
+    def calculate_position_size_percent(
+        self, entry_price: float, stop_loss_price: float
+    ) -> float:
+        """Return position size as percentage of portfolio (0-100)."""
+        _, pos_value = self.calculate_position_size(entry_price, stop_loss_price)
+        return round((pos_value / self.portfolio_size) * 100, 4)
+
+    # ====================================================================
+    # LEGACY: Simpler methods kept for backward compatibility
+    # ====================================================================
+
+    def calculate_take_profit_price(
+        self,
+        entry_price: float,
+        risk_reward_ratio: float = 2.0,
+        stop_loss_price: Optional[float] = None,
+    ) -> float:
+        """Calculate TP from R:R ratio (legacy method)."""
+        if stop_loss_price is None:
+            raise ValueError("stop_loss_price is required")
+        risk = abs(entry_price - stop_loss_price)
+        reward = risk * risk_reward_ratio
+        if stop_loss_price < entry_price:
+            return entry_price + reward
+        else:
+            return entry_price - reward
+
+    def calculate_tp_sl_atr_based(
+        self,
+        entry_price: float,
+        atr: float,
+        direction: str = "long",
+        atr_multiplier_tp: float = 2.0,
+        atr_multiplier_sl: float = 1.0,
+    ) -> Tuple[float, float]:
+        """ATR-based TP/SL (legacy method — prefer calculate_adaptive_tp_sl)."""
+        if direction == "long":
+            return entry_price + atr * atr_multiplier_tp, entry_price - atr * atr_multiplier_sl
+        else:
+            return entry_price - atr * atr_multiplier_tp, entry_price + atr * atr_multiplier_sl
+
+    def calculate_tp_sl_percent_based(
+        self,
+        entry_price: float,
+        tp_percent: float = 5.0,
+        sl_percent: float = 2.0,
+        direction: str = "long",
+    ) -> Tuple[float, float]:
+        """Percent-based TP/SL (legacy fallback — prefer adaptive method)."""
+        tp_dist = entry_price * (tp_percent / 100)
+        sl_dist = entry_price * (sl_percent / 100)
+        if direction == "long":
+            return entry_price + tp_dist, entry_price - sl_dist
+        else:
+            return entry_price - tp_dist, entry_price + sl_dist
+
+    def validate_risk(self, risk_reward_ratio: float, min_ratio: Optional[float] = None) -> bool:
+        """Validate if risk/reward ratio is acceptable."""
+        min_r = min_ratio if min_ratio is not None else self.min_risk_reward
+        return risk_reward_ratio >= min_r

@@ -1,0 +1,267 @@
+"""
+FastAPI Application Server
+Main entry point for the Crypto Trading Signal Server
+"""
+
+import logging
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from prometheus_fastapi_instrumentator import Instrumentator
+import os
+import httpx
+from config.settings import settings
+from src.monitoring.logger import setup_logging
+import asyncio
+from src.api.routes.signals import router as signals_router, get_signal_engine, shutdown_signal_engine
+from src.api.routes.news import router as news_router
+from src.database.db import init_db
+
+# Setup logging
+setup_logging()
+logger = logging.getLogger(__name__)
+
+# Shutdown event flag
+shutdown_event = asyncio.Event()
+
+
+def create_app() -> FastAPI:
+    """Create and configure FastAPI application"""
+
+    app = FastAPI(
+        title=settings.APP_NAME,
+        description="Professional-grade cryptocurrency trading signal server with AI analysis",
+        version=settings.APP_VERSION,
+        docs_url="/api/docs",
+        redoc_url="/api/redoc",
+        openapi_url="/api/openapi.json",
+    )
+
+    # Add CORS Middleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],  # Configure appropriately in production
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # Add Trusted Host Middleware
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=["*"]  # Allow all hosts for internal docker networking
+    )
+
+    # Include routers
+    app.include_router(signals_router)
+    app.include_router(news_router)
+
+    # Instrumentation (Prometheus Metrics)
+    if settings.ENABLE_PROMETHEUS:
+        Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+
+    # Static files mounting
+    if os.path.exists("static"):
+        app.mount("/static", StaticFiles(directory="static"), name="static")
+
+    # Serve dashboard at root
+    @app.get("/", tags=["UI"])
+    async def serve_dashboard():
+        """Serve the research analyst dashboard"""
+        dashboard_path = os.path.join("static", "index.html")
+        if os.path.exists(dashboard_path):
+            return FileResponse(dashboard_path)
+        return {"message": "Dashboard not found. Run with static files correctly mounted."}
+
+    # Add error handlers
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request, exc):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "success": False,
+                "error": exc.detail,
+                "status_code": exc.status_code,
+            },
+        )
+
+    @app.exception_handler(Exception)
+    async def general_exception_handler(request, exc):
+        logger.error(f"Unhandled exception: {str(exc)}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": "Internal server error",
+                "status_code": 500,
+            },
+        )
+
+    # Health check endpoint
+    @app.get("/health", tags=["Health"])
+    async def health_check():
+        """Health check endpoint"""
+        return {
+            "status": "healthy",
+            "app": settings.APP_NAME,
+            "version": settings.APP_VERSION,
+        }
+
+    # API Root
+    @app.get("/api", tags=["Root"])
+    async def api_root():
+        """API root endpoint"""
+        return {
+            "app": settings.APP_NAME,
+            "version": settings.APP_VERSION,
+            "endpoints": {
+                "signals": "/api/v1/signals",
+                "news": "/api/v1/news",
+                "health": "/health",
+                "docs": "/api/docs",
+            }
+        }
+
+    async def pull_ollama_model():
+        """Pull the required Ollama model if not available"""
+        if settings.LLM_PROVIDER != "ollama":
+            return
+        
+        try:
+            model = getattr(settings, f"{settings.LLM_PROVIDER.upper()}_MODEL", "mistral")
+            base_url = settings.OLLAMA_BASE_URL
+            
+            logger.info(f"Checking Ollama availability at {base_url}...")
+            
+            # Check if model is available with timeout
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.get(f"{base_url}/api/tags", timeout=10.0)
+                    if response.status_code == 200:
+                        models = response.json().get("models", [])
+                        model_names = [m["name"] for m in models]
+                        if model in model_names or f"{model}:latest" in model_names:
+                            logger.info(f"✓ Ollama model '{model}' already available")
+                            return
+                    
+                    # Pull the model
+                    logger.info(f"Pulling Ollama model '{model}' (this may take a few minutes)...")
+                    response = await client.post(
+                        f"{base_url}/api/pull",
+                        json={"name": model},
+                        timeout=300.0  # 5 minutes timeout
+                    )
+                    if response.status_code == 200:
+                        logger.info(f"✓ Successfully pulled Ollama model '{model}'")
+                    else:
+                        logger.warning(f"Failed to pull Ollama model: {response.text}")
+            except httpx.ConnectError:
+                logger.error(f"✗ Cannot connect to Ollama at {base_url}. Make sure Ollama is running.")
+                logger.info("  Continue without Ollama. Run: ollama serve")
+            except httpx.TimeoutException:
+                logger.error(f"✗ Ollama connection timeout at {base_url}")
+                logger.info("  Ollama may be slow to respond. Check its status.")
+        except Exception as e:
+            logger.error(f"Error checking Ollama: {str(e)}")
+
+    @app.on_event("startup")
+    async def startup_event():
+        """Run tasks on startup"""
+        logger.info("=" * 60)
+        logger.info("Starting Crypto Trading Signal Server")
+        logger.info("=" * 60)
+        
+        # Validate critical environment variables
+        logger.info("Validating configuration...")
+        if not settings.BINANCE_API_KEY or settings.BINANCE_API_KEY == "":
+            logger.warning("⚠ BINANCE_API_KEY not configured - Binance data fetching will fail")
+        if not settings.BINANCE_API_SECRET or settings.BINANCE_API_SECRET == "":
+            logger.warning("⚠ BINANCE_API_SECRET not configured - Binance data fetching will fail")
+        if settings.JWT_SECRET_KEY == "your-secret-key-change-in-production":
+            logger.error("✗ JWT_SECRET_KEY is still default - MUST be changed in production!")
+        
+        # Validate database connection
+        logger.info("Testing database connection...")
+        from src.database.db import test_connection
+        db_ok = await test_connection()
+        if not db_ok:
+            logger.error("✗ Cannot connect to database - check DATABASE_URL configuration")
+            logger.error(f"  DATABASE_URL: {settings.DATABASE_URL}")
+        
+        # Initialize database
+        logger.info("Initializing database...")
+        try:
+            await init_db()
+            logger.info("✓ Database initialized")
+        except Exception as e:
+            logger.error(f"✗ Database initialization failed: {str(e)}")
+            raise
+        
+        # Pull Ollama model if using Ollama
+        if settings.LLM_PROVIDER == "ollama":
+            await pull_ollama_model()
+        else:
+            logger.info(f"Using LLM provider: {settings.LLM_PROVIDER}")
+        
+        logger.info("Starting background market scanner...")
+        asyncio.create_task(market_scanner())
+        logger.info("✓ Application startup complete")
+
+    @app.on_event("shutdown")
+    async def shutdown_handler():
+        """Clean up on shutdown"""
+        logger.info("Shutting down application...")
+        shutdown_event.set()
+        await shutdown_signal_engine()
+        logger.info("Application shutdown complete.")
+
+    async def market_scanner():
+        """Periodically scan market for signals and AI opportunities"""
+        engine = await get_signal_engine()
+        while not shutdown_event.is_set():
+            try:
+                logger.info("Background scanner: Initiating market-wide scan...")
+                
+                # Parallel scan across symbols
+                for symbol in settings.SUPPORTED_CRYPTOS:
+                    if shutdown_event.is_set():
+                        break
+                    # Technical multi-strategy scan
+                    await engine.multi_strategy_signal(symbol, settings.DEFAULT_TIMEFRAME)
+                    
+                    # AI Research Analyst independent scan (for high priority)
+                    # To save tokens, we could limit this or rotate
+                    if symbol in ["BTC", "ETH", "SOL"]:
+                        await engine.generate_ai_signal(symbol, "1h")
+                
+                logger.info(f"Background scanner: Completed scan. Waiting {settings.SCAN_INTERVAL}s...")
+            except Exception as e:
+                logger.error(f"Background scanner error: {str(e)}")
+            
+            # Wait for interval or shutdown
+            try:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=settings.SCAN_INTERVAL)
+            except asyncio.TimeoutError:
+                pass
+
+    logger.info(f"FastAPI application '{settings.APP_NAME}' created successfully")
+    return app
+
+
+# Create application instance
+app = create_app()
+
+
+if __name__ == "__main__":
+    import uvicorn
+    
+    logger.info(f"Starting server on {settings.SERVER_HOST}:{settings.SERVER_PORT}")
+    uvicorn.run(
+        app,
+        host=settings.SERVER_HOST,
+        port=settings.SERVER_PORT,
+        workers=settings.WORKERS,
+        log_level=settings.LOG_LEVEL.lower(),
+    )

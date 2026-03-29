@@ -1,0 +1,91 @@
+name: crypto-bot
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: crypto-bot-db
+    environment:
+      POSTGRES_DB: crypto_bot_dev
+      POSTGRES_USER: crypto_user
+      POSTGRES_PASSWORD: crypto_password
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crypto_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: crypto-bot-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI Application (Development)
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+    container_name: crypto-bot-api
+    environment:
+      ENV: development
+      DATABASE_URL: postgresql://crypto_user:crypto_password@postgres:5432/crypto_bot_dev
+      REDIS_URL: redis://redis:6379/0
+      BINANCE_TESTNET: "True"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ..:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn src.api.server:app --host 0.0.0.0 --port 8000 --reload
+
+  # Prometheus (Monitoring)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: crypto-bot-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+
+  # Local LLM (Ollama)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: crypto-bot-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  prometheus_data:
+  ollama_data:
+
+networks:
+  default:
+    name: crypto-bot-network
