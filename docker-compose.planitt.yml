@@ -1,0 +1,90 @@
+name: planitt
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: planitt-ollama
+    volumes:
+      - planitt_ollama_data:/root/.ollama
+    expose:
+      - "11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mongodb:
+    image: mongo:7
+    container_name: planitt-mongodb
+    volumes:
+      - planitt_mongo_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: planitt
+    expose:
+      - "27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  planitt-backend:
+    build:
+      context: ./planitt-backend
+    container_name: planitt-backend
+    environment:
+      PORT: "3000"
+      MONGODB_URI: "mongodb://mongodb:27017/planitt"
+      JWT_SECRET: "change-me-planitt-jwt-secret"
+      PLANITT_INTERNAL_API_KEY: "change-me-planitt-internal-key"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+
+  signal-processing:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: planitt-signal-processing
+    environment:
+      ENV: "development"
+
+      # Run Planitt mode without legacy Postgres initialization.
+      ENABLE_POSTGRES_DB_INIT: "false"
+
+      # LLM (local-only via Ollama)
+      LLM_PROVIDER: "ollama"
+      OLLAMA_BASE_URL: "http://ollama:11434"
+      OLLAMA_MODEL: "mistral"
+
+      # FastAPI internal API key (protects /api/v1/signals/*)
+      PLANITT_PROCESSOR_INTERNAL_API_KEY: "change-me-planitt-internal-key"
+
+      # Forwarding to NestJS backend
+      PLANITT_BACKEND_BASE_URL: "http://planitt-backend:3000"
+      PLANITT_BACKEND_INTERNAL_API_KEY: "change-me-planitt-internal-key"
+
+      # Recommended signals threshold
+      PLANITT_MIN_CONFIDENCE: "70"
+
+      # Binance (public endpoints are used; keys are optional for klines)
+      BINANCE_TESTNET: "true"
+    depends_on:
+      ollama:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+volumes:
+  planitt_ollama_data:
+  planitt_mongo_data:
+
+networks:
+  default:
+    name: planitt-network
+

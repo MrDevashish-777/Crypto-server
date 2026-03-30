@@ -3,19 +3,27 @@ Signal API Routes
 Endpoints for signal generation and retrieval
 """
 
-from fastapi import APIRouter, HTTPException, Query, Path
+from fastapi import APIRouter, Depends, HTTPException, Query, Path
 from typing import List, Optional
 import logging
 from src.signals.engine import SignalEngine
 from src.signals.signal import TradingSignal, SignalResponse
 from config.constants import CRYPTO_PAIRS, TIMEFRAMES
+from src.api.middleware.internal_api_key import require_internal_api_key
+from src.planitt.processor import PlanittProcessor
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/signals", tags=["signals"])
+router = APIRouter(
+    prefix="/api/v1/signals",
+    tags=["signals"],
+    dependencies=[Depends(require_internal_api_key)],
+)
 
 # Global signal engine instance
 signal_engine = None
+planitt_processor: Optional[PlanittProcessor] = None
 
 
 async def get_signal_engine():
@@ -33,6 +41,22 @@ async def shutdown_signal_engine():
         await signal_engine.close()
         signal_engine = None
         logger.info("Signal engine shut down successfully")
+
+
+async def get_planitt_processor() -> PlanittProcessor:
+    """Get (singleton) Planitt processing pipeline."""
+    global planitt_processor
+    if planitt_processor is None:
+        planitt_processor = PlanittProcessor()
+    return planitt_processor
+
+
+async def shutdown_planitt_processor() -> None:
+    """Shutdown Planitt processor resources."""
+    global planitt_processor
+    if planitt_processor is not None:
+        await planitt_processor.close()
+        planitt_processor = None
 
 
 @router.get("", response_model=SignalResponse)
@@ -68,7 +92,7 @@ async def get_signals(
 async def generate_signal(
     symbol: str = Query(..., description="Crypto symbol (BTC, ETH, etc)"),
     timeframe: str = Query("15m", description="Timeframe"),
-    strategy: str = Query("rsi", description="Strategy name (rsi, macd)"),
+    strategy: str = Query("planitt", description="(Deprecated) strategy hint"),
 ):
     """
     Generate a trading signal for a symbol
@@ -79,32 +103,31 @@ async def generate_signal(
     - strategy: Strategy to use (default: rsi)
     """
     try:
-        # Validate inputs
         if symbol not in CRYPTO_PAIRS:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unsupported symbol: {symbol}. Supported: {list(CRYPTO_PAIRS.keys())}"
+                detail=f"Unsupported symbol: {symbol}. Supported: {list(CRYPTO_PAIRS.keys())}",
             )
         if timeframe not in TIMEFRAMES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported timeframe: {timeframe}"
-            )
+            raise HTTPException(status_code=400, detail=f"Unsupported timeframe: {timeframe}")
 
-        engine = await get_signal_engine()
-        signal = await engine.generate_signal(symbol, timeframe, strategy)
+        correlation_id = f"planitt-{int(datetime.utcnow().timestamp() * 1000)}-{symbol}"
 
-        if signal:
-            return SignalResponse(
-                success=True,
-                data=signal,
-                message=f"Signal generated: {signal.signal_type.value}"
-            )
-        else:
-            return SignalResponse(
-                success=False,
-                message="No signal generated - conditions not met"
-            )
+        processor = await get_planitt_processor()
+        payload = await processor.generate_and_forward(
+            symbol=symbol,
+            timeframe=timeframe,
+            correlation_id=correlation_id,
+        )
+
+        if payload is None:
+            return SignalResponse(success=False, message="NO TRADE - conditions unclear")
+
+        return SignalResponse(
+            success=True,
+            data=payload,
+            message=f"Signal emitted for {payload.get('asset')}",
+        )
 
     except HTTPException:
         raise

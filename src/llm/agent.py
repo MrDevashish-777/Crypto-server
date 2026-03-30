@@ -230,6 +230,83 @@ class OllamaAgent(LLMAgent):
                 logger.error(f"Ollama analysis failed: {str(e)}")
                 return {"sentiment": "neutral", "confidence": 0.0}
 
+    async def generate_planitt_decision(
+        self,
+        *,
+        market_data: Dict[str, Any],
+        context: str = "",
+    ) -> str:
+        """
+        Generate a strict Planitt decision for trading signals.
+
+        Output contract (STRICT):
+        - Either the literal string: "NO TRADE"
+        - Or JSON matching the PlanittLLMDecision schema:
+          {
+            "signal_type":"BUY"|"SELL",
+            "confidence": 1..100,
+            "strategy":"string",
+            "reason":"string",
+            "validity":"2-4 hours",
+            "risk_reward_ratio":"1:<number>"
+          }
+
+        We compute TP/SL/entry_range deterministically in Python later; the model only decides
+        whether to trade and provides human-readable strategy/reasoning.
+        """
+
+        decision_prompt = f"""
+You are Planitt, a professional crypto signal desk that ONLY recommends trades when strong confluence exists.
+
+You must obey the following rules:
+1. If conditions are unclear, weak trend, or confluence is insufficient, respond with exactly:
+NO TRADE
+2. Otherwise respond with ONLY strict JSON (no markdown, no code fences) with EXACTLY these keys:
+   signal_type, confidence, strategy, reason, validity, risk_reward_ratio
+3. signal_type must be "BUY" or "SELL".
+4. confidence must be an integer between 1 and 100. Use >70 only when confluence is strong.
+5. validity must be a string like "2-4 hours".
+6. risk_reward_ratio must be a string like "1:2.1".
+
+Level consistency guidance (use if helpful, but do not output numeric levels here):
+- For BUY: stop_loss must be below entry, take profits above entry.
+- For SELL: stop_loss above entry, take profits below entry.
+
+Return ONLY JSON or ONLY NO TRADE.
+
+Context (recent successful patterns, may be empty):
+{context}
+
+Market input (pre-gates already validated confluence candidates):
+{market_data}
+"""
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": decision_prompt,
+                }
+            ],
+            "stream": False,
+        }
+
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(
+                    f"{self.base_url}/api/chat",
+                    json=payload,
+                    timeout=60.0,
+                )
+                response.raise_for_status()
+                result = response.json()
+                content = result.get("message", {}).get("content", "").strip()
+                return content
+            except Exception as e:
+                logger.error(f"Ollama Planitt decision failed: {str(e)}")
+                return "NO TRADE"
+
     async def generate_signal_confidence(
         self,
         symbol: str,

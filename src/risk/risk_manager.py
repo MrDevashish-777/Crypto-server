@@ -121,6 +121,75 @@ class RiskManager:
         )
         return round(tp, 6), round(sl, 6), metadata
 
+    # ====================================================================
+    # MULTI-TP SUPPORT (Planitt)
+    # ====================================================================
+    def calculate_multi_tp_sl(
+        self,
+        entry_price: float,
+        atr: float,
+        direction: str,
+        regime: str = "trending",
+        *,
+        strong_trend_for_tp3: bool = False,
+    ) -> Tuple[float, float, float, float, Dict]:
+        """
+        Calculate (tp1, tp2, tp3, sl) with RR enforcement.
+
+        Implementation:
+        - Use calculate_adaptive_tp_sl() to get tp2 (moderate) and sl while enforcing min R:R.
+        - Derive tp1/tp3 around the tp2 reward distance.
+        """
+
+        tp2, sl, meta = self.calculate_adaptive_tp_sl(
+            entry_price=entry_price,
+            atr=atr,
+            direction=direction,
+            regime=regime,
+        )
+
+        risk = abs(entry_price - sl)
+        reward_mid = abs(tp2 - entry_price)
+        if risk <= 0:
+            # Degenerate fallback; still keep strict ordering by using fixed deltas.
+            risk = max(abs(entry_price) * 0.01, 1e-6)
+            reward_mid = risk * self.min_risk_reward
+
+        # Conservative TP1: slightly less than tp2
+        reward_tp1 = reward_mid * 0.75
+        # TP3: aggressive only in strong trends; otherwise keep modestly above tp2.
+        reward_tp3 = reward_mid * (1.45 if strong_trend_for_tp3 else 1.15)
+
+        if direction == "long":
+            tp1 = entry_price + reward_tp1
+            tp3 = entry_price + reward_tp3
+        else:
+            tp1 = entry_price - reward_tp1
+            tp3 = entry_price - reward_tp3
+
+        # Ensure strict ordering for consumers that require tp1 < tp2 < tp3 (long).
+        # For short, strict ordering is tp3 < tp2 < tp1.
+        if direction == "long":
+            if not (tp1 < tp2 < tp3):
+                tp1 = entry_price + reward_mid * 0.65
+                tp3 = entry_price + reward_mid * (1.50 if strong_trend_for_tp3 else 1.20)
+        else:
+            if not (tp3 < tp2 < tp1):
+                tp1 = entry_price - reward_mid * 0.65
+                tp3 = entry_price - reward_mid * (1.50 if strong_trend_for_tp3 else 1.20)
+
+        rr2 = abs(tp2 - entry_price) / max(abs(entry_price - sl), 1e-9)
+        multi_meta = {
+            **meta,
+            "tp1": round(tp1, 6),
+            "tp2": round(tp2, 6),
+            "tp3": round(tp3, 6),
+            "sl": round(sl, 6),
+            "rr_tp2": round(rr2, 3),
+            "strong_trend_for_tp3": strong_trend_for_tp3,
+        }
+        return round(tp1, 6), round(tp2, 6), round(tp3, 6), round(sl, 6), multi_meta
+
     def _get_regime_multipliers(self, regime: str) -> Tuple[float, float]:
         """Get (tp_mult, sl_mult) for the given market regime."""
         multipliers = {

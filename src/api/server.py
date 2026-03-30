@@ -12,10 +12,11 @@ from fastapi.staticfiles import StaticFiles
 from prometheus_fastapi_instrumentator import Instrumentator
 import os
 import httpx
+from datetime import datetime
 from config.settings import settings
 from src.monitoring.logger import setup_logging
 import asyncio
-from src.api.routes.signals import router as signals_router, get_signal_engine, shutdown_signal_engine
+from src.api.routes.signals import router as signals_router, get_planitt_processor, shutdown_planitt_processor
 from src.api.routes.news import router as news_router
 from src.database.db import init_db
 
@@ -182,22 +183,25 @@ def create_app() -> FastAPI:
         if settings.JWT_SECRET_KEY == "your-secret-key-change-in-production":
             logger.error("✗ JWT_SECRET_KEY is still default - MUST be changed in production!")
         
-        # Validate database connection
-        logger.info("Testing database connection...")
-        from src.database.db import test_connection
-        db_ok = await test_connection()
-        if not db_ok:
-            logger.error("✗ Cannot connect to database - check DATABASE_URL configuration")
-            logger.error(f"  DATABASE_URL: {settings.DATABASE_URL}")
-        
-        # Initialize database
-        logger.info("Initializing database...")
-        try:
-            await init_db()
-            logger.info("✓ Database initialized")
-        except Exception as e:
-            logger.error(f"✗ Database initialization failed: {str(e)}")
-            raise
+        if settings.ENABLE_POSTGRES_DB_INIT:
+            # Validate database connection
+            logger.info("Testing database connection...")
+            from src.database.db import test_connection
+            db_ok = await test_connection()
+            if not db_ok:
+                logger.error("✗ Cannot connect to database - check DATABASE_URL configuration")
+                logger.error(f"  DATABASE_URL: {settings.DATABASE_URL}")
+
+            # Initialize database
+            logger.info("Initializing database...")
+            try:
+                await init_db()
+                logger.info("✓ Database initialized")
+            except Exception as e:
+                logger.error(f"✗ Database initialization failed: {str(e)}")
+                raise
+        else:
+            logger.info("Skipping Postgres DB init (Planitt mode)")
         
         # Pull Ollama model if using Ollama
         if settings.LLM_PROVIDER == "ollama":
@@ -214,12 +218,12 @@ def create_app() -> FastAPI:
         """Clean up on shutdown"""
         logger.info("Shutting down application...")
         shutdown_event.set()
-        await shutdown_signal_engine()
+        await shutdown_planitt_processor()
         logger.info("Application shutdown complete.")
 
     async def market_scanner():
         """Periodically scan market for signals and AI opportunities"""
-        engine = await get_signal_engine()
+        processor = await get_planitt_processor()
         while not shutdown_event.is_set():
             try:
                 logger.info("Background scanner: Initiating market-wide scan...")
@@ -228,13 +232,13 @@ def create_app() -> FastAPI:
                 for symbol in settings.SUPPORTED_CRYPTOS:
                     if shutdown_event.is_set():
                         break
-                    # Technical multi-strategy scan
-                    await engine.multi_strategy_signal(symbol, settings.DEFAULT_TIMEFRAME)
-                    
-                    # AI Research Analyst independent scan (for high priority)
-                    # To save tokens, we could limit this or rotate
-                    if symbol in ["BTC", "ETH", "SOL"]:
-                        await engine.generate_ai_signal(symbol, "1h")
+
+                    correlation_id = f"planitt-scan-{int(datetime.utcnow().timestamp() * 1000)}-{symbol}"
+                    await processor.generate_and_forward(
+                        symbol=symbol,
+                        timeframe=settings.DEFAULT_TIMEFRAME,
+                        correlation_id=correlation_id,
+                    )
                 
                 logger.info(f"Background scanner: Completed scan. Waiting {settings.SCAN_INTERVAL}s...")
             except Exception as e:

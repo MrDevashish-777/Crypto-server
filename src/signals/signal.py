@@ -4,7 +4,7 @@ Trading Signal Object and Response Models
 
 from dataclasses import dataclass, asdict
 from enum import Enum
-from typing import Optional, List, Union, Any
+from typing import Optional, List, Union, Any, Literal
 from datetime import datetime
 
 
@@ -119,3 +119,52 @@ class SignalResponse:
     def __post_init__(self):
         if not self.timestamp:
             self.timestamp = datetime.utcnow().isoformat()
+
+
+def format_planitt_payload(
+    *,
+    asset: str,
+    signal_type: Literal["BUY", "SELL"] | str,
+    entry_range: list[float],
+    stop_loss: float,
+    take_profit: dict[str, float],
+    risk_reward_ratio: str,
+    confidence: int,
+    timeframe: str,
+    strategy: str,
+    reason: str,
+    validity: str,
+    created_at: datetime,
+    status: Literal["active", "hit_tp", "hit_sl", "expired"] = "active",
+    expires_at: datetime | None = None,
+    dedup_key: str | None = None,
+) -> dict:
+    """
+    Format a strict Planitt signal payload for the backend.
+
+    The processor will still validate this payload against the strict Pydantic schema,
+    but having this helper keeps the serialization contract consistent.
+    """
+
+    return {
+        "asset": asset,
+        "signal_type": str(signal_type).upper(),
+        "entry_range": entry_range,
+        "stop_loss": stop_loss,
+        "take_profit": {
+            "tp1": take_profit["tp1"],
+            "tp2": take_profit["tp2"],
+            "tp3": take_profit["tp3"],
+        },
+        "timeframe": timeframe,
+        "confidence": confidence,
+        "strategy": strategy,
+        "reason": reason,
+        "validity": validity,
+        "created_at": created_at.isoformat(),
+        "status": status,
+        "risk_reward_ratio": risk_reward_ratio,
+        # Optional internal fields
+        "expires_at": expires_at.isoformat() if expires_at else None,
+        "dedup_key": dedup_key,
+    }

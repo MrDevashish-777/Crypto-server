@@ -104,6 +104,23 @@ class Settings(BaseSettings):
     LLM_ANALYSIS_THRESHOLD: float = 0.50
     SCAN_INTERVAL: int = 60  # seconds
 
+    # Postgres is used by legacy parts of this repo (SQLAlchemy migrations, trade execution history).
+    # Planitt mode can run without it.
+    ENABLE_POSTGRES_DB_INIT: bool = os.getenv("ENABLE_POSTGRES_DB_INIT", "true").lower() == "true"
+
+    # --------------------------------------------------------------------
+    # Planitt (recommended signals) - FastAPI processor -> NestJS backend
+    # --------------------------------------------------------------------
+    # NestJS backend public base URL (used by clients, if needed) or internal
+    # base URL for service-to-service communication.
+    PLANITT_BACKEND_BASE_URL: str = os.getenv("PLANITT_BACKEND_BASE_URL", "http://localhost:3000")
+    # API key used by FastAPI processor to authenticate with NestJS internal endpoints.
+    PLANITT_BACKEND_INTERNAL_API_KEY: str = os.getenv("PLANITT_BACKEND_INTERNAL_API_KEY", "change-me")
+    # API key used to protect Planitt processor endpoints on FastAPI (internal only).
+    PLANITT_PROCESSOR_INTERNAL_API_KEY: str = os.getenv("PLANITT_PROCESSOR_INTERNAL_API_KEY", "change-me")
+    # Only accept LLM decisions above this threshold.
+    PLANITT_MIN_CONFIDENCE: int = int(os.getenv("PLANITT_MIN_CONFIDENCE", "70"))
+
     # Logging
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

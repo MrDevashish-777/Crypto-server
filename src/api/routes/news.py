@@ -3,15 +3,20 @@ News API Routes
 Endpoints for fetching latest market news and sentiment
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Dict, Any
 import logging
 from src.api.routes.signals import get_signal_engine
 from src.signals.signal import SignalResponse
+from src.api.middleware.internal_api_key import require_internal_api_key
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/news", tags=["news"])
+router = APIRouter(
+    prefix="/api/v1/news",
+    tags=["news"],
+    dependencies=[Depends(require_internal_api_key)],
+)
 
 @router.get("", response_model=SignalResponse)
 async def get_news(
