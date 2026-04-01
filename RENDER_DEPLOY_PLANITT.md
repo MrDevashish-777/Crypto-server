@@ -5,7 +5,7 @@ This guide focuses on deploying the **NestJS backend** (MongoDB + public read AP
 ## 1) Deploy MongoDB Atlas
 1. Create a MongoDB Atlas cluster.
 2. Create a database user with read/write permissions for the `planitt` database.
-3. Get your connection string (e.g. `mongodb+srv://<user>:<pass>@<host>/planitt?retryWrites=true&w=majority`).
+3. Get your connection string (e.g. `mongodb+srv://planittcrypto_db_user:XD0ITbU8bHCdhaE1@planitt.5hxwdty.mongodb.net/`).
 
 ## 2) Deploy `planitt-backend` on Render (public)
 Create a **Web Service** for the NestJS backend.

@@ -70,6 +70,7 @@ pytest --maxfail=1 --disable-warnings -q
 ## 📁 Project layout
 
 - `src/api` - API server and routes
+- `apps/planitt-admin` - Next.js admin dashboard (hybrid NestJS/FastAPI proxy)
 - `src/data` - Binance client and data fetcher
 - `src/indicators` - indicator implementations
 - `src/signals` - strategies and signal engine
@@ -78,6 +79,11 @@ pytest --maxfail=1 --disable-warnings -q
 - `src/database` - models, CRUD, migrations
 - `scripts` - setup helpers
 - `tests` - tests
+
+## Admin Dashboard
+
+- New admin dashboard lives at `apps/planitt-admin`.
+- Cutover/migration guide: `ADMIN_DASHBOARD_CUTOVER.md`.
 
 ---
 

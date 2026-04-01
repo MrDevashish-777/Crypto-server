@@ -44,5 +44,30 @@ export class SignalsController {
   async getPerformance() {
     return this.signalsService.getPerformance();
   }
+
+  // Internal read endpoints for trusted admin tools (avoid manual JWT generation in ops)
+  @Get('internal/signals')
+  @UseGuards(ApiKeyGuard)
+  async getSignalsInternal(
+    @Query('asset') asset?: string,
+    @Query('timeframe') timeframe?: string,
+    @Query('limit') limit?: string,
+    @Headers('x-correlation-id') correlationId?: string,
+  ) {
+    const parsedLimit = limit ? parseInt(limit, 10) : undefined;
+    return this.signalsService.getActiveSignals({ asset, timeframe, limit: parsedLimit }, correlationId);
+  }
+
+  @Get('internal/performance')
+  @UseGuards(ApiKeyGuard)
+  async getPerformanceInternal() {
+    return this.signalsService.getPerformance();
+  }
+
+  @Get('internal/signals/:id')
+  @UseGuards(ApiKeyGuard)
+  async getSignalByIdInternal(@Param('id') id: string) {
+    return this.signalsService.getByIdPublic(id);
+  }
 }
 

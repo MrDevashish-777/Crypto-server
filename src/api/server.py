@@ -224,21 +224,27 @@ def create_app() -> FastAPI:
     async def market_scanner():
         """Periodically scan market for signals and AI opportunities"""
         processor = await get_planitt_processor()
+        # If PLANITT_SCAN_TIMEFRAMES is set, scan all provided timeframes each cycle.
+        configured_tfs = [
+            tf.strip() for tf in settings.PLANITT_SCAN_TIMEFRAMES_RAW.split(",") if tf.strip()
+        ]
+        scan_timeframes = configured_tfs if configured_tfs else [settings.DEFAULT_TIMEFRAME]
         while not shutdown_event.is_set():
             try:
-                logger.info("Background scanner: Initiating market-wide scan...")
+                logger.info(f"Background scanner: Initiating market-wide scan for TFs={scan_timeframes} ...")
                 
                 # Parallel scan across symbols
                 for symbol in settings.SUPPORTED_CRYPTOS:
                     if shutdown_event.is_set():
                         break
 
-                    correlation_id = f"planitt-scan-{int(datetime.utcnow().timestamp() * 1000)}-{symbol}"
-                    await processor.generate_and_forward(
-                        symbol=symbol,
-                        timeframe=settings.DEFAULT_TIMEFRAME,
-                        correlation_id=correlation_id,
-                    )
+                    for timeframe in scan_timeframes:
+                        correlation_id = f"planitt-scan-{int(datetime.utcnow().timestamp() * 1000)}-{symbol}-{timeframe}"
+                        await processor.generate_and_forward(
+                            symbol=symbol,
+                            timeframe=timeframe,
+                            correlation_id=correlation_id,
+                        )
                 
                 logger.info(f"Background scanner: Completed scan. Waiting {settings.SCAN_INTERVAL}s...")
             except Exception as e:

@@ -120,6 +120,12 @@ class Settings(BaseSettings):
     PLANITT_PROCESSOR_INTERNAL_API_KEY: str = os.getenv("PLANITT_PROCESSOR_INTERNAL_API_KEY", "change-me")
     # Only accept LLM decisions above this threshold.
     PLANITT_MIN_CONFIDENCE: int = int(os.getenv("PLANITT_MIN_CONFIDENCE", "70"))
+    # Comma separated list of scan timeframes, ex: "5m,15m,1h"
+    PLANITT_SCAN_TIMEFRAMES_RAW: str = os.getenv("PLANITT_SCAN_TIMEFRAMES", "")
+    # Tunables for confluence pre-gates (helps reduce over-filtering in live markets)
+    PLANITT_MIN_CONFLUENCE_HITS: int = int(os.getenv("PLANITT_MIN_CONFLUENCE_HITS", "2"))
+    PLANITT_VOLUME_MULTIPLIER: float = float(os.getenv("PLANITT_VOLUME_MULTIPLIER", "1.2"))
+    PLANITT_TOUCH_TOLERANCE_PCT: float = float(os.getenv("PLANITT_TOUCH_TOLERANCE_PCT", "0.01"))
 
     # Logging
     LOG_LEVEL: str = "INFO"

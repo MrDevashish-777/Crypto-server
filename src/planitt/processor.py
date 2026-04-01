@@ -112,8 +112,9 @@ class PlanittProcessor:
         features = evaluate_confluence_pre_gates(
             candle_list,
             adx_trend_threshold=25.0,
-            volume_multiplier=1.5,
-            min_confluence_hits=3,
+            volume_multiplier=settings.PLANITT_VOLUME_MULTIPLIER,
+            touch_tolerance_pct=settings.PLANITT_TOUCH_TOLERANCE_PCT,
+            min_confluence_hits=settings.PLANITT_MIN_CONFLUENCE_HITS,
         )
         if features is None:
             logger.info(
