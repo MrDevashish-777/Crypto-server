@@ -93,8 +93,9 @@ pytest --maxfail=1 --disable-warnings -q
   - `FASTAPI_BASE_URL=<private FastAPI ops service URL>`
   - `FASTAPI_INTERNAL_API_KEY=<same value as PLANITT_PROCESSOR_INTERNAL_API_KEY>`
   - `NEXTAUTH_SECRET`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`
-- Keep auto-generation local-only by setting `ENABLE_BACKGROUND_SCANNER=true` locally and `ENABLE_BACKGROUND_SCANNER=false` on hosted FastAPI ops service.
-- For hosted FastAPI ops service, restrict ingress and set `FASTAPI_CORS_ORIGINS`/`FASTAPI_TRUSTED_HOSTS`.
+- Keep auto-generation local-only by setting `ENABLE_BACKGROUND_SCANNER=true` on your local processor runtime.
+- Do not deploy FastAPI as a public service for signal generation; use `planitt-backend` on Render as the only public API layer.
+- Ensure local processor forwarding envs are set: `PLANITT_BACKEND_BASE_URL`, `PLANITT_BACKEND_INTERNAL_API_KEY`, and `ENABLE_POSTGRES_DB_INIT=false`.
 - Important naming: `NEST_API_BASE_URL` is for admin panel routes, while `PLANITT_BACKEND_BASE_URL` is for local FastAPI processor-to-backend calls.
 
 ---

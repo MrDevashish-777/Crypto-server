@@ -106,7 +106,8 @@ class Settings(BaseSettings):
 
     # Postgres is used by legacy parts of this repo (SQLAlchemy migrations, trade execution history).
     # Planitt mode can run without it.
-    ENABLE_POSTGRES_DB_INIT: bool = os.getenv("ENABLE_POSTGRES_DB_INIT", "true").lower() == "true"
+    # Keep Postgres startup initialization opt-in. Signal-carrier mode does not require Postgres.
+    ENABLE_POSTGRES_DB_INIT: bool = os.getenv("ENABLE_POSTGRES_DB_INIT", "false").lower() == "true"
 
     # --------------------------------------------------------------------
     # Planitt (recommended signals) - FastAPI processor -> NestJS backend
@@ -115,7 +116,7 @@ class Settings(BaseSettings):
     # base URL for service-to-service communication.
     PLANITT_BACKEND_BASE_URL: str = os.getenv("PLANITT_BACKEND_BASE_URL", "http://localhost:3000")
     # API key used by FastAPI processor to authenticate with NestJS internal endpoints.
-    PLANITT_BACKEND_INTERNAL_API_KEY: str = os.getenv("PLANITT_BACKEND_INTERNAL_API_KEY", "change-me")
+    PLANITT_BACKEND_INTERNAL_API_KEY: str = os.getenv("PLANITT_BACKEND_INTERNAL_API_KEY", "")
     # API key used to protect Planitt processor endpoints on FastAPI (internal only).
     PLANITT_PROCESSOR_INTERNAL_API_KEY: str = os.getenv("PLANITT_PROCESSOR_INTERNAL_API_KEY", "change-me")
     # Only accept LLM decisions above this threshold.

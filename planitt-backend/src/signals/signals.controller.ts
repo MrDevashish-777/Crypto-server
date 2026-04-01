@@ -2,7 +2,6 @@ import { Body, Controller, Get, Headers, HttpCode, Param, Post, Query, UseGuards
 import { CreateSignalDto } from './dto/create-signal.dto';
 import { SignalsService } from './signals.service';
 import { ApiKeyGuard } from '../common/guards/api-key.guard';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller()
 export class SignalsController {
@@ -22,7 +21,7 @@ export class SignalsController {
 
   // Public endpoints: read-only for frontend/mobile
   @Get('signals')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(ApiKeyGuard)
   async getSignals(
     @Query('asset') asset?: string,
     @Query('timeframe') timeframe?: string,
@@ -34,13 +33,13 @@ export class SignalsController {
   }
 
   @Get('signals/:id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(ApiKeyGuard)
   async getSignalById(@Param('id') id: string) {
     return this.signalsService.getByIdPublic(id);
   }
 
   @Get('performance')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(ApiKeyGuard)
   async getPerformance() {
     return this.signalsService.getPerformance();
   }

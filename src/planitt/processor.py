@@ -244,6 +244,13 @@ class PlanittProcessor:
         url = f"{base_url}/signals"
         api_key = settings.PLANITT_BACKEND_INTERNAL_API_KEY
 
+        if not api_key or api_key == "change-me":
+            logger.error(
+                "Planitt backend API key missing; set PLANITT_BACKEND_INTERNAL_API_KEY",
+                extra={"correlation_id": correlation_id, "asset": payload.get("asset")},
+            )
+            return
+
         headers = {"x-api-key": api_key, "x-correlation-id": correlation_id}
         max_retries = 4
         backoff = 0.8
