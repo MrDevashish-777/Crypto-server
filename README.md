@@ -85,18 +85,16 @@ pytest --maxfail=1 --disable-warnings -q
 - New admin dashboard lives at `apps/planitt-admin`.
 - Cutover/migration guide: `ADMIN_DASHBOARD_CUTOVER.md`.
 - Production admin deployment (`planitt-crypto.netlify.app`) uses server-side Next routes.
-- Recommended full hosted-admin setup with private ops: `ADMIN_DEPLOYMENT_MODE=hybrid`.
+- Recommended hosted-admin setup: `ADMIN_DEPLOYMENT_MODE=single_backend`.
 - Set these Netlify environment variables for admin API calls:
   - `NEST_API_BASE_URL=https://planitt-backend-crypto.onrender.com`
   - `NEST_API_INTERNAL_API_KEY=<same value as backend PLANITT_INTERNAL_API_KEY>`
-  - `ADMIN_DEPLOYMENT_MODE=hybrid`
-  - `FASTAPI_BASE_URL=<private FastAPI ops service URL>`
-  - `FASTAPI_INTERNAL_API_KEY=<same value as PLANITT_PROCESSOR_INTERNAL_API_KEY>`
+  - `ADMIN_DEPLOYMENT_MODE=single_backend`
   - `NEXTAUTH_SECRET`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`
-- Keep auto-generation local-only by setting `ENABLE_BACKGROUND_SCANNER=true` on your local processor runtime.
-- Do not deploy FastAPI as a public service for signal generation; use `planitt-backend` on Render as the only public API layer.
-- Ensure local processor forwarding envs are set: `PLANITT_BACKEND_BASE_URL`, `PLANITT_BACKEND_INTERNAL_API_KEY`, and `ENABLE_POSTGRES_DB_INIT=false`.
-- Important naming: `NEST_API_BASE_URL` is for admin panel routes, while `PLANITT_BACKEND_BASE_URL` is for local FastAPI processor-to-backend calls.
+- Keep local worker processing enabled with `ENABLE_BACKGROUND_SCANNER=true`.
+- Do not deploy FastAPI as a public service; use `planitt-backend` on Render as the only public API layer.
+- Ensure local worker envs are set: `PLANITT_BACKEND_BASE_URL`, `PLANITT_BACKEND_INTERNAL_API_KEY`, and `ENABLE_POSTGRES_DB_INIT=false`.
+- Important naming: `NEST_API_BASE_URL` is for admin panel routes, while `PLANITT_BACKEND_BASE_URL` is for local worker-to-backend calls.
 
 ---
 

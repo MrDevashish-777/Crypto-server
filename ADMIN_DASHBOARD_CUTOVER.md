@@ -13,17 +13,16 @@ In `apps/planitt-admin/.env.local`:
 - `ADMIN_USERNAME`
 - `ADMIN_PASSWORD`
 - `NEST_API_BASE_URL`
-- `NEST_API_JWT`
-- `FASTAPI_BASE_URL`
-- `FASTAPI_INTERNAL_API_KEY`
+- `NEST_API_INTERNAL_API_KEY` (preferred) or `NEST_API_JWT`
+- `ADMIN_DEPLOYMENT_MODE=single_backend`
 
 ## 3) Validate functional parity
 Checklist:
 - Login works and `/dashboard/*` is protected.
 - Signals list reads from NestJS (`GET /signals`) with pagination and filters.
-- Manual generation triggers FastAPI via server-side proxy.
-- News and market status are visible via FastAPI internal endpoints.
-- Ops health page shows Nest/FastAPI service availability.
+- Manual generation enqueues backend generation jobs (`POST /generation-jobs`).
+- News and market status are visible via NestJS endpoints (`GET /news`, `GET /market-status`).
+- Ops health page shows Nest services availability (performance/news/market/jobs).
 
 ## 4) Traffic switch options
 Choose one:
@@ -43,7 +42,7 @@ Choose one:
 
 ## 6) Security checks before cutover
 - Confirm no internal keys are exposed in browser network logs.
-- Confirm FastAPI internal routes reject requests without `x-api-key`.
-- Confirm NestJS public reads require valid JWT.
+- Confirm NestJS internal routes reject requests without `x-api-key`.
+- Confirm admin route handlers require authenticated session.
 - Rotate internal keys once production is stable.
 

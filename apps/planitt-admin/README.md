@@ -28,8 +28,7 @@ Admin dashboard will be available at [http://localhost:3100](http://localhost:31
 
 ## Required backend services
 
-- NestJS backend (`NEST_API_BASE_URL`) for signals/performance reads.
-- FastAPI processor (`FASTAPI_BASE_URL`) for internal generation/news routes.
+- NestJS backend (`NEST_API_BASE_URL`) for all admin reads and actions.
 
 ## Scripts
 
@@ -42,6 +41,7 @@ Admin dashboard will be available at [http://localhost:3100](http://localhost:31
 
 ## Architecture notes
 
-- Browser never calls FastAPI internal endpoints directly.
+- Browser never calls internal endpoints directly.
 - Next.js route handlers (`/api/admin/*`) proxy calls and inject internal keys server-side.
 - Session auth is cookie-based and guards all `/dashboard/*` routes.
+- Production mode should set `ADMIN_DEPLOYMENT_MODE=single_backend`.
