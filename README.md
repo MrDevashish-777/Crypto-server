@@ -85,13 +85,16 @@ pytest --maxfail=1 --disable-warnings -q
 - New admin dashboard lives at `apps/planitt-admin`.
 - Cutover/migration guide: `ADMIN_DASHBOARD_CUTOVER.md`.
 - Production admin deployment (`planitt-crypto.netlify.app`) uses server-side Next routes.
+- Recommended private-algo setup: `ADMIN_DEPLOYMENT_MODE=public_nest_only`.
 - Set these Netlify environment variables for admin API calls:
   - `NEST_API_BASE_URL=https://planitt-backend-crypto.onrender.com`
   - `NEST_API_INTERNAL_API_KEY=<same value as backend PLANITT_INTERNAL_API_KEY>`
-  - `FASTAPI_BASE_URL=<deployed FastAPI processor URL>`
-  - `FASTAPI_INTERNAL_API_KEY=<same value as PLANITT_PROCESSOR_INTERNAL_API_KEY>`
+  - `ADMIN_DEPLOYMENT_MODE=public_nest_only`
+  - `FASTAPI_BASE_URL=https://127.0.0.1.invalid` (placeholder in Option A)
+  - `FASTAPI_INTERNAL_API_KEY=<optional in Option A>`
   - `NEXTAUTH_SECRET`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`
-- Important naming: `NEST_API_BASE_URL` is for admin panel routes, while `PLANITT_BACKEND_BASE_URL` is for FastAPI processor-to-backend calls.
+- Option A behavior: `/api/admin/news`, `/api/admin/market-status`, `/api/admin/generate` return `503` by design to keep algo services private.
+- Important naming: `NEST_API_BASE_URL` is for admin panel routes, while `PLANITT_BACKEND_BASE_URL` is for local FastAPI processor-to-backend calls.
 
 ---
 

@@ -1,11 +1,17 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/server/guard";
 import { correlationId } from "@/lib/api/fetcher";
-import { fetchUpstream, safeMustEnv } from "@/lib/server/upstream";
+import {
+  fetchUpstream,
+  isPublicNestOnlyMode,
+  localOnlyFeatureDisabledResponse,
+  safeMustEnv,
+} from "@/lib/server/upstream";
 
 export async function GET() {
   const auth = await requireAdmin();
   if (!auth.ok) return auth.response;
+  if (isPublicNestOnlyMode()) return localOnlyFeatureDisabledResponse("market-status");
 
   const fastapiEnv = safeMustEnv("FASTAPI_BASE_URL");
   if (!fastapiEnv.ok) return fastapiEnv.response;

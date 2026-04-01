@@ -1,4 +1,6 @@
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
   IsArray,
   IsDateString,
   IsEnum,
@@ -6,7 +8,6 @@ import {
   IsNumber,
   IsOptional,
   IsString,
-  Length,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -22,7 +23,8 @@ export class CreateSignalDto {
   signal_type: SignalType;
 
   @IsArray()
-  @Length(2, 2)
+  @ArrayMinSize(2)
+  @ArrayMaxSize(2)
   @IsNumber({}, { each: true })
   entry_range: number[];
 

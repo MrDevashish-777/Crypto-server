@@ -15,7 +15,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(private readonly cfg: ConfigService) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
-      secretOrKey: cfg.get<string>('JWT_SECRET') ?? 'dev-secret-change-me',
+      secretOrKey: cfg.get<string>('JWT_SECRET'),
       ignoreExpiration: false,
     });
   }

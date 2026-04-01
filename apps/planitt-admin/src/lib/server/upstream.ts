@@ -22,6 +22,28 @@ export function safeMustEnv(name: string): EnvResult {
   return { ok: true, value };
 }
 
+export type AdminDeploymentMode = "public_nest_only" | "hybrid";
+
+export function getAdminDeploymentMode(): AdminDeploymentMode {
+  return process.env.ADMIN_DEPLOYMENT_MODE === "hybrid" ? "hybrid" : "public_nest_only";
+}
+
+export function isPublicNestOnlyMode(): boolean {
+  return getAdminDeploymentMode() === "public_nest_only";
+}
+
+export function localOnlyFeatureDisabledResponse(feature: string) {
+  return NextResponse.json(
+    {
+      error: "Feature disabled in production deployment mode",
+      feature,
+      deployment_mode: getAdminDeploymentMode(),
+      hint: "Run in hybrid mode for FastAPI-backed operator features.",
+    },
+    { status: 503 },
+  );
+}
+
 export async function fetchUpstream(
   url: string,
   init: RequestInit,

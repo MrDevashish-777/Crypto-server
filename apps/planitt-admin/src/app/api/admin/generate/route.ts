@@ -1,11 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/server/guard";
 import { correlationId } from "@/lib/api/fetcher";
-import { fetchUpstream, safeMustEnv } from "@/lib/server/upstream";
+import {
+  fetchUpstream,
+  isPublicNestOnlyMode,
+  localOnlyFeatureDisabledResponse,
+  safeMustEnv,
+} from "@/lib/server/upstream";
 
 export async function POST(req: NextRequest) {
   const auth = await requireAdmin();
   if (!auth.ok) return auth.response;
+  if (isPublicNestOnlyMode()) return localOnlyFeatureDisabledResponse("generate");
 
   const body = (await req.json()) as { symbol?: string; timeframe?: string; strategy?: string };
   const symbol = (body.symbol || "").trim();

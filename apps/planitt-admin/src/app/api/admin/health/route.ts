@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/server/guard";
 import { correlationId } from "@/lib/api/fetcher";
-import { safeMustEnv } from "@/lib/server/upstream";
+import { isPublicNestOnlyMode, safeMustEnv } from "@/lib/server/upstream";
 
 async function statusCheck(url: string, headers?: Record<string, string>) {
   try {
@@ -17,12 +17,13 @@ export async function GET() {
   if (!auth.ok) return auth.response;
 
   const nestBaseEnv = safeMustEnv("NEST_API_BASE_URL");
-  const fastapiEnv = safeMustEnv("FASTAPI_BASE_URL");
-  const fastapiKeyEnv = safeMustEnv("FASTAPI_INTERNAL_API_KEY");
+  const nestOnlyMode = isPublicNestOnlyMode();
+  const fastapiEnv = nestOnlyMode ? null : safeMustEnv("FASTAPI_BASE_URL");
+  const fastapiKeyEnv = nestOnlyMode ? null : safeMustEnv("FASTAPI_INTERNAL_API_KEY");
   const missingEnvVars: string[] = [];
   if (!nestBaseEnv.ok) missingEnvVars.push("NEST_API_BASE_URL");
-  if (!fastapiEnv.ok) missingEnvVars.push("FASTAPI_BASE_URL");
-  if (!fastapiKeyEnv.ok) missingEnvVars.push("FASTAPI_INTERNAL_API_KEY");
+  if (!nestOnlyMode && fastapiEnv && !fastapiEnv.ok) missingEnvVars.push("FASTAPI_BASE_URL");
+  if (!nestOnlyMode && fastapiKeyEnv && !fastapiKeyEnv.ok) missingEnvVars.push("FASTAPI_INTERNAL_API_KEY");
 
   if (missingEnvVars.length > 0) {
     return NextResponse.json(
@@ -38,8 +39,8 @@ export async function GET() {
 
   const nestBase = nestBaseEnv.ok ? nestBaseEnv.value.replace(/\/$/, "") : "";
   const nestInternalApiKey = process.env.NEST_API_INTERNAL_API_KEY;
-  const fastapi = fastapiEnv.ok ? fastapiEnv.value.replace(/\/$/, "") : "";
-  const fastapiKey = fastapiKeyEnv.ok ? fastapiKeyEnv.value : "";
+  const fastapi = !nestOnlyMode && fastapiEnv && fastapiEnv.ok ? fastapiEnv.value.replace(/\/$/, "") : "";
+  const fastapiKey = !nestOnlyMode && fastapiKeyEnv && fastapiKeyEnv.ok ? fastapiKeyEnv.value : "";
   const corr = correlationId("health");
   const nestPath = nestInternalApiKey ? "/internal/performance" : "/performance";
   const nestHeaders: Record<string, string> = { "x-correlation-id": corr };
@@ -61,15 +62,18 @@ export async function GET() {
     nestHeaders.Authorization = `Bearer ${jwtEnv.value}`;
   }
 
-  const [nest, fast, news, market] = await Promise.all([
-    statusCheck(`${nestBase}${nestPath}`, nestHeaders),
-    statusCheck(`${fastapi}/health`),
-    statusCheck(`${fastapi}/api/v1/news?limit=1`, { "x-api-key": fastapiKey, "x-correlation-id": corr }),
-    statusCheck(`${fastapi}/api/v1/signals/market/status`, { "x-api-key": fastapiKey, "x-correlation-id": corr }),
-  ]);
+  const nest = await statusCheck(`${nestBase}${nestPath}`, nestHeaders);
+  const [fast, news, market] = nestOnlyMode
+    ? [{ ok: false, status: 503 }, { ok: false, status: 503 }, { ok: false, status: 503 }]
+    : await Promise.all([
+        statusCheck(`${fastapi}/health`),
+        statusCheck(`${fastapi}/api/v1/news?limit=1`, { "x-api-key": fastapiKey, "x-correlation-id": corr }),
+        statusCheck(`${fastapi}/api/v1/signals/market/status`, { "x-api-key": fastapiKey, "x-correlation-id": corr }),
+      ]);
 
   return NextResponse.json({
     checked_at: new Date().toISOString(),
+    deployment_mode: nestOnlyMode ? "public_nest_only" : "hybrid",
     services: {
       nest_api: nest,
       fastapi_health: fast,
