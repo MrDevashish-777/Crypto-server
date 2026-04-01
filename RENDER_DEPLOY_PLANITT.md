@@ -17,15 +17,15 @@ Create a **Web Service** for the NestJS backend.
 - `JWT_SECRET=<generate-a-strong-secret>`
 - `PLANITT_INTERNAL_API_KEY=<shared-internal-api-key>`
 
-## 2.1) Deploy `planitt-admin` on Netlify (public, Option A)
+## 2.1) Deploy `planitt-admin` on Netlify (public, hybrid mode)
 The admin app does not call Render directly from the browser. It uses server-side Next.js route handlers, so Netlify environment variables must be configured correctly.
 
 ### Required Netlify environment variables
 - `NEST_API_BASE_URL=https://planitt-backend-crypto.onrender.com`
 - `NEST_API_INTERNAL_API_KEY=<same-as-PLANITT_INTERNAL_API_KEY>`
-- `ADMIN_DEPLOYMENT_MODE=public_nest_only`
-- `FASTAPI_BASE_URL=https://127.0.0.1.invalid` (placeholder, unused in Option A)
-- `FASTAPI_INTERNAL_API_KEY=<optional in Option A>`
+- `ADMIN_DEPLOYMENT_MODE=hybrid`
+- `FASTAPI_BASE_URL=<private-fastapi-ops-url>`
+- `FASTAPI_INTERNAL_API_KEY=<same-as-PLANITT_PROCESSOR_INTERNAL_API_KEY>`
 - `NEXTAUTH_SECRET=<strong-random-secret>`
 - `ADMIN_USERNAME=<admin-user>`
 - `ADMIN_PASSWORD=<admin-password>`
@@ -35,11 +35,14 @@ If `NEST_API_INTERNAL_API_KEY` is omitted, admin routes fall back to JWT mode an
 ### CORS
 Backend CORS is configured via `CORS_ORIGINS` (comma-separated). In production, set this explicitly (for example your Netlify domain and local admin origin).
 
-## 3) Run FastAPI signal-processing locally (private, Option A)
-The FastAPI service is the **signal-processing engine** and stays local/private. It is only meant to call the backend internal endpoint.
+## 3) FastAPI split: local scanner + hosted private ops
+Use two runtimes for FastAPI code:
+- **Local Docker scanner runtime**: generates and forwards signals automatically.
+- **Hosted private ops runtime**: serves admin operations endpoints (`/health`, `/api/v1/news`, `/api/v1/signals/*`) with scanner disabled.
 
-### Required environment variables
+### Local scanner required environment variables
 - `ENABLE_POSTGRES_DB_INIT=false`
+- `ENABLE_BACKGROUND_SCANNER=true`
 - `LLM_PROVIDER=ollama`
 - `OLLAMA_BASE_URL=http://ollama:11434` (when using Docker networking)
 - `OLLAMA_MODEL=mistral` (or your chosen model)
@@ -48,10 +51,19 @@ The FastAPI service is the **signal-processing engine** and stays local/private.
 - `PLANITT_PROCESSOR_INTERNAL_API_KEY=<any-internal-key>`
 - `PLANITT_MIN_CONFIDENCE=70`
 
-### Keep Ollama and processor private (important)
-Do not expose Ollama or FastAPI with any public port mapping.
+### Hosted private ops required environment variables
+- `ENABLE_POSTGRES_DB_INIT=false`
+- `ENABLE_BACKGROUND_SCANNER=false`
+- `FASTAPI_CORS_ORIGINS=https://planitt-crypto.netlify.app`
+- `FASTAPI_TRUSTED_HOSTS=<private-fastapi-hostname>`
+- `PLANITT_BACKEND_BASE_URL=https://planitt-backend-crypto.onrender.com`
+- `PLANITT_BACKEND_INTERNAL_API_KEY=<same-as-planitt-backend>`
+- `PLANITT_PROCESSOR_INTERNAL_API_KEY=<same-as-netlify-fastapi-internal-key>`
 
-## 4) Internal API call flow (Option A)
+### Keep strategy internals private (important)
+Do not expose local scanner/Ollama publicly. Hosted FastAPI ops should be ingress-restricted and protected by `x-api-key`.
+
+## 4) Internal API call flow (hybrid)
 1. FastAPI processor posts to the backend internal endpoint:
    - `POST /signals`
    - Header: `x-api-key: <PLANITT_INTERNAL_API_KEY>`
@@ -59,7 +71,7 @@ Do not expose Ollama or FastAPI with any public port mapping.
 3. Clients fetch public signals with:
    - `GET /signals` and `GET /signals/:id`
    - Header: `Authorization: Bearer <JWT>`
-4. Admin/public clients read only from Nest; FastAPI-backed operator endpoints are disabled in Netlify `public_nest_only` mode.
+4. Hosted admin calls Nest for signals/performance and private FastAPI for news/market-status/generate.
 
 Note on naming:
 - `NEST_API_BASE_URL`: used by Netlify admin server routes.

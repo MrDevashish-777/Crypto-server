@@ -85,15 +85,16 @@ pytest --maxfail=1 --disable-warnings -q
 - New admin dashboard lives at `apps/planitt-admin`.
 - Cutover/migration guide: `ADMIN_DASHBOARD_CUTOVER.md`.
 - Production admin deployment (`planitt-crypto.netlify.app`) uses server-side Next routes.
-- Recommended private-algo setup: `ADMIN_DEPLOYMENT_MODE=public_nest_only`.
+- Recommended full hosted-admin setup with private ops: `ADMIN_DEPLOYMENT_MODE=hybrid`.
 - Set these Netlify environment variables for admin API calls:
   - `NEST_API_BASE_URL=https://planitt-backend-crypto.onrender.com`
   - `NEST_API_INTERNAL_API_KEY=<same value as backend PLANITT_INTERNAL_API_KEY>`
-  - `ADMIN_DEPLOYMENT_MODE=public_nest_only`
-  - `FASTAPI_BASE_URL=https://127.0.0.1.invalid` (placeholder in Option A)
-  - `FASTAPI_INTERNAL_API_KEY=<optional in Option A>`
+  - `ADMIN_DEPLOYMENT_MODE=hybrid`
+  - `FASTAPI_BASE_URL=<private FastAPI ops service URL>`
+  - `FASTAPI_INTERNAL_API_KEY=<same value as PLANITT_PROCESSOR_INTERNAL_API_KEY>`
   - `NEXTAUTH_SECRET`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`
-- Option A behavior: `/api/admin/news`, `/api/admin/market-status`, `/api/admin/generate` return `503` by design to keep algo services private.
+- Keep auto-generation local-only by setting `ENABLE_BACKGROUND_SCANNER=true` locally and `ENABLE_BACKGROUND_SCANNER=false` on hosted FastAPI ops service.
+- For hosted FastAPI ops service, restrict ingress and set `FASTAPI_CORS_ORIGINS`/`FASTAPI_TRUSTED_HOSTS`.
 - Important naming: `NEST_API_BASE_URL` is for admin panel routes, while `PLANITT_BACKEND_BASE_URL` is for local FastAPI processor-to-backend calls.
 
 ---

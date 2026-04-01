@@ -126,6 +126,10 @@ class Settings(BaseSettings):
     PLANITT_MIN_CONFLUENCE_HITS: int = int(os.getenv("PLANITT_MIN_CONFLUENCE_HITS", "2"))
     PLANITT_VOLUME_MULTIPLIER: float = float(os.getenv("PLANITT_VOLUME_MULTIPLIER", "1.2"))
     PLANITT_TOUCH_TOLERANCE_PCT: float = float(os.getenv("PLANITT_TOUCH_TOLERANCE_PCT", "0.01"))
+    # Keep local auto generation enabled, disable on hosted ops services when needed.
+    ENABLE_BACKGROUND_SCANNER: bool = os.getenv("ENABLE_BACKGROUND_SCANNER", "true").lower() == "true"
+    FASTAPI_CORS_ORIGINS_RAW: str = os.getenv("FASTAPI_CORS_ORIGINS", "*")
+    FASTAPI_TRUSTED_HOSTS_RAW: str = os.getenv("FASTAPI_TRUSTED_HOSTS", "*")
 
     # Logging
     LOG_LEVEL: str = "INFO"

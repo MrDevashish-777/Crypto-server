@@ -40,10 +40,13 @@ def create_app() -> FastAPI:
         openapi_url="/api/openapi.json",
     )
 
+    cors_origins = [o.strip() for o in settings.FASTAPI_CORS_ORIGINS_RAW.split(",") if o.strip()]
+    trusted_hosts = [h.strip() for h in settings.FASTAPI_TRUSTED_HOSTS_RAW.split(",") if h.strip()]
+
     # Add CORS Middleware
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Configure appropriately in production
+        allow_origins=cors_origins or ["*"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -52,7 +55,7 @@ def create_app() -> FastAPI:
     # Add Trusted Host Middleware
     app.add_middleware(
         TrustedHostMiddleware,
-        allowed_hosts=["*"]  # Allow all hosts for internal docker networking
+        allowed_hosts=trusted_hosts or ["*"]
     )
 
     # Include routers
@@ -209,8 +212,11 @@ def create_app() -> FastAPI:
         else:
             logger.info(f"Using LLM provider: {settings.LLM_PROVIDER}")
         
-        logger.info("Starting background market scanner...")
-        asyncio.create_task(market_scanner())
+        if settings.ENABLE_BACKGROUND_SCANNER:
+            logger.info("Starting background market scanner...")
+            asyncio.create_task(market_scanner())
+        else:
+            logger.info("Background market scanner disabled by ENABLE_BACKGROUND_SCANNER=false")
         logger.info("✓ Application startup complete")
 
     @app.on_event("shutdown")
