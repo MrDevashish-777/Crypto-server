@@ -113,6 +113,44 @@ class OpenAIAgent(LLMAgent):
         }, context=context)
         return float(analysis.get("confidence", 0.0))
 
+    async def generate_planitt_decision(
+        self,
+        *,
+        market_data: Dict[str, Any],
+        context: str = "",
+    ) -> str:
+        prompt = f"""
+You are Planitt, a professional crypto signal desk.
+
+Rules:
+1) If confluence is weak/unclear, respond exactly: NO TRADE
+2) Otherwise respond with ONLY strict JSON (no markdown/code fences) with keys:
+   signal_type, confidence, strategy, reason, validity, risk_reward_ratio
+3) signal_type must be BUY or SELL
+4) confidence must be integer 1..100
+5) validity format: 2-4 hours
+6) risk_reward_ratio format: 1:2.0
+
+Context:
+{context}
+
+Market input:
+{market_data}
+"""
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "Return ONLY JSON or NO TRADE."},
+                    {"role": "user", "content": prompt},
+                ],
+            )
+            content = (response.choices[0].message.content or "").strip()
+            return content or "NO TRADE"
+        except Exception as e:
+            logger.error(f"OpenAI Planitt decision failed: {str(e)}")
+            return "NO TRADE"
+
 
 class AnthropicAgent(LLMAgent):
     """Anthropic Claude-based LLM agent"""
@@ -160,6 +198,43 @@ class AnthropicAgent(LLMAgent):
         analysis = await self.analyze_market({"symbol": symbol, **indicators}, context=context)
         return float(analysis.get("confidence", 0.0))
 
+    async def generate_planitt_decision(
+        self,
+        *,
+        market_data: Dict[str, Any],
+        context: str = "",
+    ) -> str:
+        prompt = f"""
+You are Planitt, a professional crypto signal desk.
+
+Rules:
+1) If confluence is weak/unclear, respond exactly: NO TRADE
+2) Otherwise respond with ONLY strict JSON (no markdown/code fences) with keys:
+   signal_type, confidence, strategy, reason, validity, risk_reward_ratio
+3) signal_type must be BUY or SELL
+4) confidence must be integer 1..100
+5) validity format: 2-4 hours
+6) risk_reward_ratio format: 1:2.0
+
+Context:
+{context}
+
+Market input:
+{market_data}
+"""
+        try:
+            response = await self.client.messages.create(
+                model=self.model,
+                max_tokens=512,
+                system="Return ONLY JSON or NO TRADE.",
+                messages=[{"role": "user", "content": prompt}],
+            )
+            content = response.content[0].text.strip() if response.content else ""
+            return content or "NO TRADE"
+        except Exception as e:
+            logger.error(f"Anthropic Planitt decision failed: {str(e)}")
+            return "NO TRADE"
+
 
 class OllamaAgent(LLMAgent):
     """Local Ollama-based LLM agent"""
@@ -167,7 +242,9 @@ class OllamaAgent(LLMAgent):
     def __init__(self, base_url: str = "http://localhost:11434", model: str = "mistral"):
         """Initialize Ollama agent"""
         self.base_url = base_url
-        self.model = model
+        # Ollama commonly expects fully-qualified model names like `mistral:latest`.
+        # If the caller provides `mistral`, normalize to `mistral:latest`.
+        self.model = model if ":" in model else f"{model}:latest"
         logger.info(f"Ollama agent initialized with model: {model} at {base_url}")
 
     async def analyze_market(self, market_data: Dict[str, Any], context: str = "") -> Dict[str, Any]:
@@ -265,8 +342,10 @@ NO TRADE
    signal_type, confidence, strategy, reason, validity, risk_reward_ratio
 3. signal_type must be "BUY" or "SELL".
 4. confidence must be an integer between 1 and 100. Use >70 only when confluence is strong.
-5. validity must be a string like "2-4 hours".
-6. risk_reward_ratio must be a string like "1:2.1".
+5. validity must be exactly "2-4 hours".
+6. risk_reward_ratio must be a string like "1:2.1" (1:<number>).
+7. reason must be a short single line (<=80 chars). No newlines.
+8. strategy must be a short slug (snake_case).
 
 Level consistency guidance (use if helpful, but do not output numeric levels here):
 - For BUY: stop_loss must be below entry, take profits above entry.
@@ -287,9 +366,16 @@ Market input (pre-gates already validated confluence candidates):
                 {
                     "role": "user",
                     "content": decision_prompt,
-                }
+                },
             ],
             "stream": False,
+            # Keep responses short and predictable for strict parsing.
+            "format": "json",
+            "options": {
+                "temperature": 0.1,
+                # Enough tokens to output a complete strict JSON object, but not too many.
+                "num_predict": 140,
+            },
         }
 
         async with httpx.AsyncClient() as client:
@@ -297,14 +383,18 @@ Market input (pre-gates already validated confluence candidates):
                 response = await client.post(
                     f"{self.base_url}/api/chat",
                     json=payload,
-                    timeout=60.0,
+                    timeout=120.0,
                 )
                 response.raise_for_status()
                 result = response.json()
                 content = result.get("message", {}).get("content", "").strip()
                 return content
             except Exception as e:
-                logger.error(f"Ollama Planitt decision failed: {str(e)}")
+                logger.error(
+                    "Ollama Planitt decision failed: type=%s error=%r",
+                    type(e).__name__,
+                    e,
+                )
                 return "NO TRADE"
 
     async def generate_signal_confidence(

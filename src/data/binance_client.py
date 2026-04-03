@@ -32,9 +32,13 @@ class BinanceClient:
 
     def __init__(self):
         """Initialize Binance client with API credentials"""
-        self.api_key = settings.BINANCE_API_KEY
-        self.api_secret = settings.BINANCE_API_SECRET
         self.testnet = settings.BINANCE_TESTNET
+        if self.testnet:
+            self.api_key = settings.BINANCE_TESTNET_API_KEY or settings.BINANCE_API_KEY
+            self.api_secret = settings.BINANCE_TESTNET_API_SECRET or settings.BINANCE_API_SECRET
+        else:
+            self.api_key = settings.BINANCE_API_KEY
+            self.api_secret = settings.BINANCE_API_SECRET
 
         # API URLs
         if self.testnet:

@@ -63,13 +63,43 @@ export async function GET() {
   }
 
   const nest = await statusCheck(`${nestBase}${nestPath}`, nestHeaders);
-  const [fast, news, market] = nestOnlyMode
-    ? [{ ok: false, status: 503 }, { ok: false, status: 503 }, { ok: false, status: 503 }]
-    : await Promise.all([
-        statusCheck(`${fastapi}/health`),
-        statusCheck(`${fastapi}/api/v1/news?limit=1`, { "x-api-key": fastapiKey, "x-correlation-id": corr }),
-        statusCheck(`${fastapi}/api/v1/signals/market/status`, { "x-api-key": fastapiKey, "x-correlation-id": corr }),
-      ]);
+
+  let fast: { ok: boolean; status: number } = { ok: false, status: 503 };
+  let news: { ok: boolean; status: number } = { ok: false, status: 503 };
+  let market: { ok: boolean; status: number } = { ok: false, status: 503 };
+
+  if (nestOnlyMode) {
+    // Nest news + market-status endpoints are guarded by ApiKeyGuard -> requires `x-api-key`.
+    if (!nestInternalApiKey) {
+      return NextResponse.json(
+        {
+          checked_at: new Date().toISOString(),
+          status: "misconfigured",
+          missing_env_vars: ["NEST_API_INTERNAL_API_KEY"],
+          hint: "Set NEST_API_INTERNAL_API_KEY so Nest /news and /market-status can be checked.",
+        },
+        { status: 500 },
+      );
+    }
+
+    const newsCorr = correlationId("news");
+    const marketCorr = correlationId("market");
+
+    news = await statusCheck(`${nestBase}/news`, {
+      "x-api-key": nestInternalApiKey,
+      "x-correlation-id": newsCorr,
+    });
+    market = await statusCheck(`${nestBase}/market-status`, {
+      "x-api-key": nestInternalApiKey,
+      "x-correlation-id": marketCorr,
+    });
+  } else {
+    [fast, news, market] = await Promise.all([
+      statusCheck(`${fastapi}/health`),
+      statusCheck(`${fastapi}/api/v1/news?limit=1`, { "x-api-key": fastapiKey, "x-correlation-id": corr }),
+      statusCheck(`${fastapi}/api/v1/signals/market/status`, { "x-api-key": fastapiKey, "x-correlation-id": corr }),
+    ]);
+  }
 
   return NextResponse.json({
     checked_at: new Date().toISOString(),

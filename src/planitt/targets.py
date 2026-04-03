@@ -74,6 +74,19 @@ def compute_planitt_targets(features: ConfluenceFeatures) -> dict:
         strong_trend_for_tp3=strong_tp3,
     )
 
+    pattern_risk_adjusted = False
+    if (
+        settings.PATTERN_RISK_ADJUSTMENT_ENABLED
+        and features.candlestick_pattern
+        and features.candlestick_confirmed
+        and features.candlestick_strength >= settings.PATTERN_MIN_STRENGTH
+    ):
+        pattern_risk_adjusted = True
+        if direction == "long":
+            sl = sl + (entry_center - sl) * 0.08
+        else:
+            sl = sl - (sl - entry_center) * 0.08
+
     # Strict ordering adjustments relative to the computed entry_range.
     entry_low, entry_high = sorted(entry_range)
 
@@ -111,5 +124,6 @@ def compute_planitt_targets(features: ConfluenceFeatures) -> dict:
         "risk_reward_ratio": risk_reward_ratio,
         "numeric_meta": meta,
         "strong_tp3": strong_tp3,
+        "pattern_risk_adjusted": pattern_risk_adjusted,
     }
 

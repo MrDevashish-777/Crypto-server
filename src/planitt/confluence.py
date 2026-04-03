@@ -4,11 +4,13 @@ import logging
 from dataclasses import dataclass
 from typing import Literal, Optional
 
+from config.settings import settings
 from src.data.models import CandleList
 from src.indicators.ema import EMA
 from src.indicators.rsi import RSI
 from src.indicators.macd import MACD
 from src.indicators.atr import ATR
+from src.indicators.candlestick_patterns import detect_latest_candlestick_pattern
 from src.signals.market_regime import MarketRegimeDetector, MarketRegime
 
 logger = logging.getLogger(__name__)
@@ -51,6 +53,16 @@ class ConfluenceFeatures:
     confluence_hits: tuple[str, ...]
     pre_confidence: float  # 0..1
     adx: Optional[float]
+    candlestick_pattern: Optional[str]
+    candlestick_bias: Optional[Literal["bull", "bear"]]
+    candlestick_strength: float
+    candlestick_confirmed: bool
+
+
+@dataclass(frozen=True)
+class ConfluenceEvaluation:
+    features: Optional[ConfluenceFeatures]
+    reject_reason: Optional[str]
 
 
 def _volume_ratio(volumes: list[float], lookback: int) -> float:
@@ -114,14 +126,14 @@ def _swing_structure_ok(highs: list[float], lows: list[float], *, side: SignalSi
     return h2 < h1 and l2 < l1
 
 
-def evaluate_confluence_pre_gates(
+def evaluate_confluence_pre_gates_with_reason(
     candle_list: CandleList,
     *,
     adx_trend_threshold: float = 25.0,
     volume_multiplier: float = 1.5,
     touch_tolerance_pct: float = 0.0025,  # 0.25%
     min_confluence_hits: int = 3,
-) -> Optional[ConfluenceFeatures]:
+) -> ConfluenceEvaluation:
     """
     Strict pre-gates:
     - EMA alignment (20/50/200)
@@ -135,17 +147,17 @@ def evaluate_confluence_pre_gates(
     lows = candle_list.lows
     volumes = candle_list.volumes
 
-    required_len = 205  # EMA200 needs ~200 closes
+    required_len = settings.PLANITT_MIN_CANDLES
     if len(closes) < required_len:
-        return None
+        return ConfluenceEvaluation(features=None, reject_reason=f"insufficient_candles:{len(closes)}/{required_len}")
 
     # --- Non-sideways filter (must be trending) ---
     regime_detector = MarketRegimeDetector()
     regime_result = regime_detector.detect(candle_list)
     if regime_result.regime == MarketRegime.RANGING or regime_result.regime == MarketRegime.VOLATILE:
-        return None
+        return ConfluenceEvaluation(features=None, reject_reason=f"regime_filtered:{regime_result.regime.value}")
     if regime_result.adx is None or regime_result.adx < adx_trend_threshold:
-        return None
+        return ConfluenceEvaluation(features=None, reject_reason=f"adx_below_threshold:{regime_result.adx}")
 
     # --- Trend alignment EMA stack (20/50/200) ---
     ema20_ind = EMA(period=20)
@@ -159,7 +171,7 @@ def evaluate_confluence_pre_gates(
     ema50 = ema50_ind.latest_value
     ema200 = ema200_ind.latest_value
     if ema20 is None or ema50 is None or ema200 is None:
-        return None
+        return ConfluenceEvaluation(features=None, reject_reason="ema_unavailable")
 
     side: Optional[SignalSide] = None
     if ema20 > ema50 > ema200:
@@ -167,11 +179,12 @@ def evaluate_confluence_pre_gates(
     elif ema20 < ema50 < ema200:
         side = "SELL"
     else:
-        return None
+        return ConfluenceEvaluation(features=None, reject_reason="ema_misalignment")
 
     # --- Swing structure HH/HL vs LH/LL ---
-    if not _swing_structure_ok(highs, lows, side=side):
-        return None
+    swing_ok = _swing_structure_ok(highs, lows, side=side)
+    if not swing_ok and settings.PLANITT_REQUIRE_SWING_STRUCTURE:
+        return ConfluenceEvaluation(features=None, reject_reason="swing_structure_failed")
 
     # --- Indicators: RSI + MACD histogram direction ---
     rsi_ind = RSI(period=14)
@@ -179,13 +192,13 @@ def evaluate_confluence_pre_gates(
     rsi = rsi_ind.latest_value
     prev_rsi = rsi_ind.previous_value
     if rsi is None or prev_rsi is None:
-        return None
+        return ConfluenceEvaluation(features=None, reject_reason="rsi_unavailable")
 
     macd_ind = MACD()
     macd_ind.calculate(closes)
     hist = macd_ind.histogram
     if len(hist) < 2:
-        return None
+        return ConfluenceEvaluation(features=None, reject_reason="macd_unavailable")
     macd_hist = hist[-1]
     macd_hist_prev = hist[-2]
 
@@ -193,7 +206,7 @@ def evaluate_confluence_pre_gates(
     atr_ind = ATR(period=14)
     atr_values = atr_ind.calculate_from_ohlc(highs, lows, closes)
     if not atr_values:
-        return None
+        return ConfluenceEvaluation(features=None, reject_reason="atr_unavailable")
     atr = float(atr_values[-1])
 
     volume_ratio = _volume_ratio(volumes, lookback=20)
@@ -205,13 +218,15 @@ def evaluate_confluence_pre_gates(
 
     # 1) Trend alignment
     confluence_hits.append("ema_alignment")
+    if swing_ok:
+        confluence_hits.append("swing_structure")
 
     # 2) Indicator confirmation (RSI + MACD)
     if side == "BUY":
-        # Avoid overbought and require momentum turn
-        indicator_ok = 35 <= rsi <= 65 and rsi >= prev_rsi and macd_hist > 0
+        # Keep momentum confirmation but allow broader RSI band in trends.
+        indicator_ok = 30 <= rsi <= 70 and rsi >= prev_rsi and macd_hist > 0
     else:
-        indicator_ok = 35 <= rsi <= 65 and rsi <= prev_rsi and macd_hist < 0
+        indicator_ok = 30 <= rsi <= 70 and rsi <= prev_rsi and macd_hist < 0
     if indicator_ok:
         confluence_hits.append("rsi_macd_confirmation")
 
@@ -267,15 +282,50 @@ def evaluate_confluence_pre_gates(
                 setup_type = "support_resistance_reversal"
                 key_level = last_pivot_high
         else:
-            return None
+            # Continuation fallback: allow momentum continuation setup when price holds trend side.
+            if side == "BUY" and price > ema20 and macd_hist > 0:
+                confluence_hits.append("trend_continuation")
+                setup_type = "volume_breakout"
+                key_level = ema20
+            elif side == "SELL" and price < ema20 and macd_hist < 0:
+                confluence_hits.append("trend_continuation")
+                setup_type = "volume_breakout"
+                key_level = ema20
+            else:
+                return ConfluenceEvaluation(features=None, reject_reason="no_valid_setup")
 
     if len(confluence_hits) < min_confluence_hits or setup_type is None:
-        return None
+        return ConfluenceEvaluation(features=None, reject_reason=f"confluence_hits_too_low:{len(confluence_hits)}")
+
+    pattern_name: Optional[str] = None
+    pattern_bias: Optional[Literal["bull", "bear"]] = None
+    pattern_strength = 0.0
+    pattern_confirmed = False
+    if settings.ENABLE_CANDLESTICK_PATTERNS:
+        pattern = detect_latest_candlestick_pattern(
+            opens=candle_list.opens,
+            highs=highs,
+            lows=lows,
+            closes=closes,
+            volumes=volumes,
+        )
+        if pattern and pattern["strength"] >= settings.PATTERN_MIN_STRENGTH:
+            pattern_name = pattern["pattern_name"]
+            pattern_bias = pattern["bias"]
+            pattern_strength = float(pattern["strength"])
+            pattern_confirmed = bool(pattern["confirmation"])
+            side_is_bull = side == "BUY"
+            if (side_is_bull and pattern_bias == "bull") or ((not side_is_bull) and pattern_bias == "bear"):
+                confluence_hits.append(f"candlestick_{pattern_name.lower()}")
+                if pattern_confirmed:
+                    confluence_hits.append("candlestick_confirmation")
 
     # Pre-confidence heuristic (0..1): more confluence hits and stronger volume ratio.
     pre_conf = min(0.95, 0.45 + (len(confluence_hits) * 0.12) + (max(0.0, volume_ratio - 1.0) * 0.05))
+    if pattern_strength > 0 and pattern_confirmed:
+        pre_conf = min(0.97, pre_conf + min(pattern_strength * 0.08, 0.06))
 
-    return ConfluenceFeatures(
+    return ConfluenceEvaluation(features=ConfluenceFeatures(
         asset=candle_list.symbol,
         timeframe=candle_list.timeframe,
         side=side,
@@ -295,5 +345,27 @@ def evaluate_confluence_pre_gates(
         confluence_hits=tuple(confluence_hits),
         pre_confidence=float(pre_conf),
         adx=regime_result.adx,
+        candlestick_pattern=pattern_name,
+        candlestick_bias=pattern_bias,
+        candlestick_strength=pattern_strength,
+        candlestick_confirmed=pattern_confirmed,
+    ), reject_reason=None)
+
+
+def evaluate_confluence_pre_gates(
+    candle_list: CandleList,
+    *,
+    adx_trend_threshold: float = 25.0,
+    volume_multiplier: float = 1.5,
+    touch_tolerance_pct: float = 0.0025,
+    min_confluence_hits: int = 3,
+) -> Optional[ConfluenceFeatures]:
+    result = evaluate_confluence_pre_gates_with_reason(
+        candle_list,
+        adx_trend_threshold=adx_trend_threshold,
+        volume_multiplier=volume_multiplier,
+        touch_tolerance_pct=touch_tolerance_pct,
+        min_confluence_hits=min_confluence_hits,
     )
+    return result.features
 

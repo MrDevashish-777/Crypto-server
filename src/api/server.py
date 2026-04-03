@@ -246,11 +246,17 @@ def create_app() -> FastAPI:
 
                     for timeframe in scan_timeframes:
                         correlation_id = f"planitt-scan-{int(datetime.utcnow().timestamp() * 1000)}-{symbol}-{timeframe}"
-                        await processor.generate_and_forward(
-                            symbol=symbol,
-                            timeframe=timeframe,
-                            correlation_id=correlation_id,
-                        )
+                        try:
+                            await processor.generate_and_forward(
+                                symbol=symbol,
+                                timeframe=timeframe,
+                                correlation_id=correlation_id,
+                            )
+                        except Exception as inner_e:
+                            logger.warning(
+                                "Background scanner symbol/timeframe failed",
+                                extra={"symbol": symbol, "timeframe": timeframe, "error": str(inner_e)},
+                            )
                 
                 logger.info(f"Background scanner: Completed scan. Waiting {settings.SCAN_INTERVAL}s...")
             except Exception as e:

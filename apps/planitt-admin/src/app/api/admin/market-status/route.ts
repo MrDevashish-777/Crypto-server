@@ -4,14 +4,35 @@ import { correlationId } from "@/lib/api/fetcher";
 import {
   fetchUpstream,
   isPublicNestOnlyMode,
-  localOnlyFeatureDisabledResponse,
   safeMustEnv,
 } from "@/lib/server/upstream";
 
 export async function GET() {
   const auth = await requireAdmin();
   if (!auth.ok) return auth.response;
-  if (isPublicNestOnlyMode()) return localOnlyFeatureDisabledResponse("market-status");
+
+  if (isPublicNestOnlyMode()) {
+    const nestBaseEnv = safeMustEnv("NEST_API_BASE_URL");
+    if (!nestBaseEnv.ok) return nestBaseEnv.response;
+    const nestBase = nestBaseEnv.value.replace(/\/$/, "");
+
+    // Nest endpoints are guarded by ApiKeyGuard -> requires `x-api-key`.
+    const nestKey = safeMustEnv("NEST_API_INTERNAL_API_KEY");
+    if (!nestKey.ok) return nestKey.response;
+
+    const url = `${nestBase}/market-status`;
+    return fetchUpstream(
+      url,
+      {
+        headers: {
+          "x-api-key": nestKey.value,
+          "x-correlation-id": correlationId("market"),
+        },
+        cache: "no-store",
+      },
+      "nest",
+    );
+  }
 
   const fastapiEnv = safeMustEnv("FASTAPI_BASE_URL");
   if (!fastapiEnv.ok) return fastapiEnv.response;

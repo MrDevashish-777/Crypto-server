@@ -90,8 +90,19 @@ class ADX(BaseIndicator):
                 dx_denom = pdi + mdi
                 raw_dx.append(100 * abs(pdi - mdi) / dx_denom if dx_denom != 0 else 0.0)
 
-        # ADX = smoothed DX
-        raw_adx = wilder_smooth(raw_dx, self.period)
+        # ADX should be Wilder-smoothed average of DX (bounded 0..100),
+        # not the running Wilder sum used for TR/DM.
+        def wilder_average(data: List[float], period: int) -> List[float]:
+            if len(data) < period:
+                return []
+            avg = sum(data[:period]) / period
+            result = [avg]
+            for i in range(period, len(data)):
+                avg = ((avg * (period - 1)) + data[i]) / period
+                result.append(avg)
+            return result
+
+        raw_adx = wilder_average(raw_dx, self.period)
 
         # Pad results to match input length
         offset = n - len(raw_plus_di)

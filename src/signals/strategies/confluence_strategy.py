@@ -35,6 +35,7 @@ from src.indicators.vwap import VWAP
 from src.indicators.cci import CCI
 from src.indicators.williams_r import WilliamsR
 from src.indicators.heikin_ashi import HeikinAshi
+from src.indicators.candlestick_patterns import detect_latest_candlestick_pattern
 from src.indicators.fibonacci import FibonacciLevels
 from src.indicators.pivot_points import PivotPoints
 from src.risk.risk_manager import RiskManager
@@ -54,6 +55,7 @@ INDICATOR_WEIGHTS = {
     "bollinger":    0.08,
     "cci":          0.06,
     "williams_r":   0.06,
+    "candlestick":  settings.PATTERN_WEIGHT,
 }
 
 
@@ -85,6 +87,7 @@ class ConfluenceStrategy(BaseStrategy):
         self.fib = FibonacciLevels(swing_lookback=50)
         self.pivot = PivotPoints()
         self.risk_manager = RiskManager(min_risk_reward=settings.MIN_RISK_REWARD_RATIO)
+        self._latest_pattern = None
 
     def _calc_rsi_vote(self, closes: List[float]) -> Tuple[Optional[str], float]:
         self.rsi.calculate(closes)
@@ -188,12 +191,32 @@ class ConfluenceStrategy(BaseStrategy):
             return "bear", brs
         return None, 0.0
 
+    def _calc_candlestick_vote(self, opens, highs, lows, closes, volumes) -> Tuple[Optional[str], float]:
+        if not settings.ENABLE_CANDLESTICK_PATTERNS:
+            return None, 0.0
+        pattern = detect_latest_candlestick_pattern(
+            opens=opens,
+            highs=highs,
+            lows=lows,
+            closes=closes,
+            volumes=volumes,
+        )
+        if pattern is None:
+            self._latest_pattern = None
+            return None, 0.0
+        if pattern["strength"] < settings.PATTERN_MIN_STRENGTH:
+            self._latest_pattern = pattern
+            return None, 0.0
+        self._latest_pattern = pattern
+        return ("bull", float(pattern["strength"])) if pattern["bias"] == "bull" else ("bear", float(pattern["strength"]))
+
     def analyze(self, candle_list: CandleList, regime: str = "trending") -> Optional[TradingSignal]:
         """Run all indicator votes and produce a confluence signal."""
         if not self._validate_candle_count(candle_list, 210):
             return None
 
         closes = candle_list.closes
+        opens = candle_list.opens
         highs = candle_list.highs
         lows = candle_list.lows
         volumes = candle_list.volumes
@@ -212,6 +235,7 @@ class ConfluenceStrategy(BaseStrategy):
             "bollinger":  self._calc_bollinger_vote(closes, current_price),
             "cci":        self._calc_cci_vote(highs, lows, closes),
             "williams_r": self._calc_williams_vote(highs, lows, closes),
+            "candlestick": self._calc_candlestick_vote(opens, highs, lows, closes, volumes),
         }
 
         # Tally weighted scores
@@ -314,6 +338,7 @@ class ConfluenceStrategy(BaseStrategy):
                 "total_sources_checked": len(votes),
                 "votes": vote_summary,
                 "ATR": round(atr, 6),
+                "candlestick_pattern": self._latest_pattern,
                 **meta,
             },
         )

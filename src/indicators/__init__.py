@@ -17,9 +17,10 @@ from src.indicators.fibonacci import FibonacciLevels
 from src.indicators.pivot_points import PivotPoints
 from src.indicators.heikin_ashi import HeikinAshi
 from src.indicators.adx import ADX
+from src.indicators.candlestick_patterns import detect_latest_candlestick_pattern
 
 __all__ = [
     "RSI", "MACD", "BollingerBands", "Stochastic", "ATR", "EMA", "SMA",
     "Ichimoku", "Supertrend", "VWAP", "OBV", "WilliamsR", "CCI",
-    "FibonacciLevels", "PivotPoints", "HeikinAshi", "ADX",
+    "FibonacciLevels", "PivotPoints", "HeikinAshi", "ADX", "detect_latest_candlestick_pattern",
 ]

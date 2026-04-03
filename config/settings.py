@@ -42,7 +42,9 @@ class Settings(BaseSettings):
     # API Keys & Credentials
     BINANCE_API_KEY: str = ""
     BINANCE_API_SECRET: str = ""
-    BINANCE_TESTNET: bool = True
+    BINANCE_TESTNET_API_KEY: str = ""
+    BINANCE_TESTNET_API_SECRET: str = ""
+    BINANCE_TESTNET: bool = False
 
     # LLM Configuration
     LLM_PROVIDER: str = "openai"  # openai, anthropic, local
@@ -127,6 +129,13 @@ class Settings(BaseSettings):
     PLANITT_MIN_CONFLUENCE_HITS: int = int(os.getenv("PLANITT_MIN_CONFLUENCE_HITS", "2"))
     PLANITT_VOLUME_MULTIPLIER: float = float(os.getenv("PLANITT_VOLUME_MULTIPLIER", "1.2"))
     PLANITT_TOUCH_TOLERANCE_PCT: float = float(os.getenv("PLANITT_TOUCH_TOLERANCE_PCT", "0.01"))
+    PLANITT_MIN_CANDLES: int = int(os.getenv("PLANITT_MIN_CANDLES", "205"))
+    PLANITT_ADX_TREND_THRESHOLD: float = float(os.getenv("PLANITT_ADX_TREND_THRESHOLD", "20"))
+    PLANITT_REQUIRE_SWING_STRUCTURE: bool = os.getenv("PLANITT_REQUIRE_SWING_STRUCTURE", "false").lower() == "true"
+    ENABLE_CANDLESTICK_PATTERNS: bool = os.getenv("ENABLE_CANDLESTICK_PATTERNS", "true").lower() == "true"
+    PATTERN_MIN_STRENGTH: float = float(os.getenv("PATTERN_MIN_STRENGTH", "0.55"))
+    PATTERN_WEIGHT: float = float(os.getenv("PATTERN_WEIGHT", "0.06"))
+    PATTERN_RISK_ADJUSTMENT_ENABLED: bool = os.getenv("PATTERN_RISK_ADJUSTMENT_ENABLED", "false").lower() == "true"
     # Keep local auto generation enabled, disable on hosted ops services when needed.
     ENABLE_BACKGROUND_SCANNER: bool = os.getenv("ENABLE_BACKGROUND_SCANNER", "true").lower() == "true"
     FASTAPI_CORS_ORIGINS_RAW: str = os.getenv("FASTAPI_CORS_ORIGINS", "*")
@@ -148,7 +157,15 @@ class Settings(BaseSettings):
 
 @lru_cache()
 def get_settings() -> Settings:
-    """Get cached settings instance"""
+    """Get cached settings instance.
+
+    In Docker bind-mount environments on macOS, reading `.env` can intermittently
+    fail with OS-level file locking/deadlock errors. Allow disabling dotenv file
+    parsing and rely on process environment only.
+    """
+    disable_dotenv = os.getenv("DISABLE_DOTENV", "false").lower() == "true"
+    if disable_dotenv:
+        return Settings(_env_file=None)
     return Settings()
 
 

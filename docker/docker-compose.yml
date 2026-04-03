@@ -37,15 +37,25 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.dev
     container_name: crypto-bot-api
+    restart: unless-stopped
+    env_file:
+      - ../.env
     environment:
       ENV: development
       DATABASE_URL: postgresql://crypto_user:crypto_password@postgres:5432/crypto_bot_dev
       REDIS_URL: redis://redis:6379/0
-      BINANCE_TESTNET: "True"
+      BINANCE_TESTNET: "False"
+      DISABLE_DOTENV: "true"
+      ENABLE_POSTGRES_DB_INIT: "false"
+      ENABLE_BACKGROUND_SCANNER: "true"
+      # Scan multiple timeframes to actually generate candidates (15m alone was too strict).
+      PLANITT_SCAN_TIMEFRAMES: "${PLANITT_SCAN_TIMEFRAMES:-5m,15m,1h}"
+      LLM_PROVIDER: "ollama"
+      OLLAMA_MODEL: "mistral"
+      OLLAMA_BASE_URL: "http://ollama:11434"
+      PLANITT_BACKEND_BASE_URL: "${PLANITT_BACKEND_BASE_URL:-https://planitt-backend-crypto.onrender.com}"
     ports:
       - "8000:8000"
-    volumes:
-      - ..:/app
     depends_on:
       postgres:
         condition: service_healthy
@@ -53,12 +63,22 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: uvicorn src.api.server:app --host 0.0.0.0 --port 8000 --reload --reload-dir src --reload-exclude "logs/*" --reload-exclude ".git/*"
+    # Run Uvicorn directly so the service stays up reliably.
+    command:
+      - python
+      - -m
+      - uvicorn
+      - src.api.server:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
 
   # Prometheus (Monitoring)
   prometheus:
     image: prom/prometheus:latest
     container_name: crypto-bot-prometheus
+    restart: unless-stopped
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus_data:/prometheus

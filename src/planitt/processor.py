@@ -13,7 +13,7 @@ from config.settings import settings
 from src.data.data_fetcher import DataFetcher
 from src.llm.agent import LLMAgentFactory
 from src.llm.context import ContextManager
-from src.planitt.confluence import evaluate_confluence_pre_gates
+from src.planitt.confluence import evaluate_confluence_pre_gates_with_reason
 from src.planitt.schemas import (
     PlanittSignal,
     compute_expires_at,
@@ -99,115 +99,145 @@ class PlanittProcessor:
             # Reserve the key early to avoid concurrency duplicates.
             self._dedup[dedup_key] = True
 
-        # 1) Fetch candles
-        candle_list = await self.data_fetcher.fetch_candles(
-            symbol=symbol,
-            timeframe=timeframe,
-            limit=260,
-            from_cache=True,
-            min_candles=205,
-        )
-
-        # 2) Pre-gates (confluence)
-        features = evaluate_confluence_pre_gates(
-            candle_list,
-            adx_trend_threshold=25.0,
-            volume_multiplier=settings.PLANITT_VOLUME_MULTIPLIER,
-            touch_tolerance_pct=settings.PLANITT_TOUCH_TOLERANCE_PCT,
-            min_confluence_hits=settings.PLANITT_MIN_CONFLUENCE_HITS,
-        )
-        if features is None:
-            logger.info(
-                "Planitt drop: confluence_failed",
-                extra={"correlation_id": correlation_id, "asset": pair_asset, "timeframe": timeframe},
+        try:
+            # 1) Fetch candles
+            candle_list = await self.data_fetcher.fetch_candles(
+                symbol=symbol,
+                timeframe=timeframe,
+                limit=260,
+                from_cache=True,
+                min_candles=settings.PLANITT_MIN_CANDLES,
             )
-            async with self._dedup_lock:
-                # Allow future attempt within the same process if initial gates were too strict.
-                # If you want strict dedup across retries, remove this line.
-                self._dedup.pop(dedup_key, None)
-            return None
 
-        # 3) LLM decision (Ollama)
-        market_data_for_llm = self._build_llm_input(features, candle_list)
-        context = ""  # keep deterministic and avoid coupling to trade history for now
-        if hasattr(self.context_manager, "get_market_regime_context"):
-            context = self.context_manager.get_market_regime_context()
-
-        if not hasattr(self.llm_agent, "generate_planitt_decision"):
-            logger.error("LLM provider does not support Planitt decisions")
-            return None
-
-        decision_raw = await self.llm_agent.generate_planitt_decision(
-            market_data=market_data_for_llm,
-            context=context,
-        )
-        parsed_decision = parse_planitt_llm_decision(decision_raw)
-        if parsed_decision.model is None:
-            logger.info(
-                "Planitt drop: llm_no_trade_or_invalid",
-                extra={"correlation_id": correlation_id, "asset": pair_asset, "timeframe": timeframe, "reason": parsed_decision.dropped_reason},
+            # 2) Pre-gates (confluence)
+            eval_result = evaluate_confluence_pre_gates_with_reason(
+                candle_list,
+                adx_trend_threshold=settings.PLANITT_ADX_TREND_THRESHOLD,
+                volume_multiplier=settings.PLANITT_VOLUME_MULTIPLIER,
+                touch_tolerance_pct=settings.PLANITT_TOUCH_TOLERANCE_PCT,
+                min_confluence_hits=settings.PLANITT_MIN_CONFLUENCE_HITS,
             )
-            async with self._dedup_lock:
-                self._dedup.pop(dedup_key, None)
-            return None
+            features = eval_result.features
+            if features is None:
+                logger.info(
+                    "Planitt drop: confluence_failed",
+                    extra={
+                        "correlation_id": correlation_id,
+                        "asset": pair_asset,
+                        "timeframe": timeframe,
+                        "reason": eval_result.reject_reason,
+                    },
+                )
+                async with self._dedup_lock:
+                    self._dedup.pop(dedup_key, None)
+                return None
 
-        decision = parsed_decision.model
-        if decision.confidence < settings.PLANITT_MIN_CONFIDENCE:
-            logger.info(
-                "Planitt drop: confidence_below_threshold",
-                extra={"correlation_id": correlation_id, "asset": pair_asset, "timeframe": timeframe, "confidence": decision.confidence},
+            # 3) LLM decision (Ollama)
+            market_data_for_llm = self._build_llm_input(features, candle_list)
+            context = ""  # keep deterministic and avoid coupling to trade history for now
+            if hasattr(self.context_manager, "get_market_regime_context"):
+                context = self.context_manager.get_market_regime_context()
+
+            if hasattr(self.llm_agent, "generate_planitt_decision"):
+                decision_raw = await self.llm_agent.generate_planitt_decision(
+                    market_data=market_data_for_llm,
+                    context=context,
+                )
+            else:
+                logger.warning("LLM provider missing Planitt decision API; falling back to NO TRADE")
+                decision_raw = "NO TRADE"
+            parsed_decision = parse_planitt_llm_decision(decision_raw)
+            if parsed_decision.model is None:
+                # Helpful diagnostics: include raw response preview when JSON parsing fails.
+                decision_raw_str = (
+                    decision_raw[:500]
+                    if isinstance(decision_raw, str)
+                    else str(decision_raw)[:500]
+                )
+                logger.info(
+                    "Planitt drop: llm_no_trade_or_invalid",
+                    extra={
+                        "correlation_id": correlation_id,
+                        "asset": pair_asset,
+                        "timeframe": timeframe,
+                        "reason": parsed_decision.dropped_reason,
+                        "decision_raw_preview": decision_raw_str,
+                    },
+                )
+                async with self._dedup_lock:
+                    self._dedup.pop(dedup_key, None)
+                return None
+
+            decision = parsed_decision.model
+            if decision.confidence < settings.PLANITT_MIN_CONFIDENCE:
+                logger.info(
+                    "Planitt drop: confidence_below_threshold",
+                    extra={"correlation_id": correlation_id, "asset": pair_asset, "timeframe": timeframe, "confidence": decision.confidence},
+                )
+                async with self._dedup_lock:
+                    self._dedup.pop(dedup_key, None)
+                return None
+
+            # 4) Deterministic numeric levels
+            targets = compute_planitt_targets(features)
+
+            # 5) Assemble strict Planitt payload for validation
+            planitt_signal = PlanittSignal.model_validate(
+                {
+                    "asset": pair_asset,
+                    "signal_type": decision.signal_type,
+                    "entry_range": targets["entry_range"],
+                    "stop_loss": targets["stop_loss"],
+                    "take_profit": targets["take_profit"],
+                    "risk_reward_ratio": targets["risk_reward_ratio"],
+                    "confidence": decision.confidence,
+                    "timeframe": timeframe,
+                    "strategy": decision.strategy,
+                    "reason": decision.reason,
+                    "validity": decision.validity,
+                }
             )
-            async with self._dedup_lock:
-                self._dedup.pop(dedup_key, None)
-            return None
 
-        # 4) Deterministic numeric levels
-        targets = compute_planitt_targets(features)
-
-        # 5) Assemble strict Planitt payload for validation
-        planitt_signal = PlanittSignal.model_validate(
-            {
-                "asset": pair_asset,
-                "signal_type": decision.signal_type,
-                "entry_range": targets["entry_range"],
-                "stop_loss": targets["stop_loss"],
-                "take_profit": targets["take_profit"],
-                "risk_reward_ratio": targets["risk_reward_ratio"],
-                "confidence": decision.confidence,
-                "timeframe": timeframe,
-                "strategy": decision.strategy,
-                "reason": decision.reason,
-                "validity": decision.validity,
+            expires_at = compute_expires_at(created_at, planitt_signal.validity)
+            reason_suffix = ""
+            if features.candlestick_pattern:
+                reason_suffix = (
+                    f" | pattern={features.candlestick_pattern}"
+                    f" strength={features.candlestick_strength:.2f}"
+                    f" confirmed={features.candlestick_confirmed}"
+                )
+            payload = {
+                "asset": planitt_signal.asset,
+                "signal_type": planitt_signal.signal_type,
+                "entry_range": planitt_signal.entry_range,
+                "stop_loss": planitt_signal.stop_loss,
+                "take_profit": planitt_signal.take_profit.model_dump(),
+                "timeframe": planitt_signal.timeframe,
+                "confidence": planitt_signal.confidence,
+                "strategy": planitt_signal.strategy,
+                "reason": f"{planitt_signal.reason}{reason_suffix}",
+                "validity": planitt_signal.validity,
+                "created_at": created_at.isoformat(),
+                "status": "active",
+                "risk_reward_ratio": planitt_signal.risk_reward_ratio,
+                # Internal helpers for dedup/expiry on the backend.
+                "expires_at": expires_at.isoformat() if expires_at else None,
+                "dedup_key": dedup_key,
             }
-        )
 
-        expires_at = compute_expires_at(created_at, planitt_signal.validity)
-        payload = {
-            "asset": planitt_signal.asset,
-            "signal_type": planitt_signal.signal_type,
-            "entry_range": planitt_signal.entry_range,
-            "stop_loss": planitt_signal.stop_loss,
-            "take_profit": planitt_signal.take_profit.model_dump(),
-            "timeframe": planitt_signal.timeframe,
-            "confidence": planitt_signal.confidence,
-            "strategy": planitt_signal.strategy,
-            "reason": planitt_signal.reason,
-            "validity": planitt_signal.validity,
-            "created_at": created_at.isoformat(),
-            "status": "active",
-            "risk_reward_ratio": planitt_signal.risk_reward_ratio,
-            # Internal helpers for dedup/expiry on the backend.
-            "expires_at": expires_at.isoformat() if expires_at else None,
-            "dedup_key": dedup_key,
-        }
-
-        # 6) Forward to backend (internal API key)
-        await self._post_to_backend(payload, correlation_id=correlation_id)
-        return payload
+            # 6) Forward to backend (internal API key)
+            await self._post_to_backend(payload, correlation_id=correlation_id)
+            return payload
+        except Exception:
+            async with self._dedup_lock:
+                self._dedup.pop(dedup_key, None)
+            raise
+        
 
     def _build_llm_input(self, features: Any, candle_list: Any) -> dict[str, Any]:
         # Keep input compact but sufficient for the model to justify decision.
-        n = min(40, len(candle_list.candles))
+        # Keep it smaller to reduce Ollama latency/timeouts during local scans.
+        n = min(20, len(candle_list.candles))
         candles = candle_list.candles[-n:]
         return {
             "asset": features.asset,
@@ -236,6 +266,12 @@ class PlanittProcessor:
                 "key_level": features.key_level,
                 "confluence_hits": list(features.confluence_hits),
                 "pre_confidence": round(features.pre_confidence, 3),
+                "candlestick": {
+                    "pattern": features.candlestick_pattern,
+                    "bias": features.candlestick_bias,
+                    "strength": round(features.candlestick_strength, 3),
+                    "confirmed": features.candlestick_confirmed,
+                },
             },
         }
 

@@ -51,6 +51,7 @@ services:
     container_name: planitt-signal-processing
     environment:
       ENV: "development"
+      DISABLE_DOTENV: "true"
 
       # Run Planitt mode without legacy Postgres initialization.
       ENABLE_POSTGRES_DB_INIT: "false"
